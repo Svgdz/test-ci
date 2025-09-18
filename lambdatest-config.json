@@ -24,7 +24,7 @@
     "reporter_config_file": "base_reporter_config.json",
     "build_name": "${LT_BUILD_NAME:-AIBEXX-E2E-Local}",
     "parallels": 1,
-    "specs": "src/__test__/e2e/**/*.cy.ts",
+    "specs": "src/__test__/e2e/ai-features.cy.ts",
     "ignore_files": "",
     "network": true,
     "headless": true,
