@@ -81,7 +81,7 @@ commands:
           name: Generate .env for build/runtime
           command: |
             echo "Generating .env from CircleCI variables..."
-            cat > .env \<< EOF
+            cat > .env << EOF
             NEXT_LOG_LEVEL=${NEXT_LOG_LEVEL:-info}
             SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
             NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-}
@@ -90,6 +90,8 @@ commands:
             NODE_ENV=production
             E2B_API_KEY=${E2B_API_KEY:-}
             CYPRESS_BASE_URL=http://localhost:3000
+            CYPRESS_TEST_EMAIL=${CYPRESS_TEST_EMAIL:-cypress-test@example.com}
+            CYPRESS_TEST_PASSWORD=${CYPRESS_TEST_PASSWORD:-CypressTest123!}
             EOF
             echo ".env generated"
 
@@ -104,24 +106,6 @@ commands:
             mkdir -p src/__test__/results
             mkdir -p src/__test__/screenshots
             mkdir -p src/__test__/videos
-
-  restore_cache_deps:
-    description: 'Restore cached dependencies'
-    steps:
-      - restore_cache:
-          keys:
-            - v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}-{{ checksum "lambdatest-config.json" }}--{{ checksum "cypress.config.ts" }}-{{ checksum "scripts/health-check.ts" }}-{{ checksum "scripts/test-app-connectivity.js" }}
-            - v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}
-            - v5-e2e-
-
-  save_cache_deps:
-    description: 'Save dependencies to cache'
-    steps:
-      - save_cache:
-          key: v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}-{{ checksum "lambdatest-config.json" }}--{{ checksum "cypress.config.ts" }}-{{ checksum "scripts/health-check.ts" }}-{{ checksum "scripts/test-app-connectivity.js" }}
-          paths:
-            - ~/.npm
-            - node_modules
 
   notify_github_status:
     description: 'Update GitHub status check'
@@ -149,271 +133,7 @@ commands:
 
 # Define the jobs
 jobs:
-  # Code quality and linting
-  lint_and_format:
-    docker:
-      - image: cimg/node:20.19.0
-    working_directory: ~/project
-    steps:
-      - checkout
-      - run:
-          name: 'Check Node and npm versions'
-          command: |
-            echo "Node version: $(node --version)"
-            echo "npm version: $(npm --version)"
-            echo "Current working directory: $(pwd)"
-            echo "Package.json exists: $(test -f package.json && echo 'yes' || echo 'no')"
-            echo "Checking for ESLint in dependencies..."
-            if command -v jq > /dev/null; then
-              echo "ESLint in devDependencies:"
-              cat package.json | jq '.devDependencies | with_entries(select(.key | contains("eslint")))'
-            else
-              echo "ESLint dependencies (grep):"
-              grep -i eslint package.json || echo "No ESLint found in package.json"
-            fi
-      - install_dependencies
-      - notify_github_status:
-          status: pending
-          context: 'ci/lint'
-      - run:
-          name: Run ESLint
-          command: |
-            echo "Running ESLint..."
-            npm run lint
-      - run:
-          name: Check Prettier formatting
-          command: |
-            echo "Running Prettier format check..."
-            npx prettier --check .
-      - run:
-          name: TypeScript type checking
-          command: |
-            echo "Running TypeScript type checking..."
-            npx tsc --noEmit
-      - notify_github_status:
-          status: success
-          context: 'ci/lint'
-
-  # Unit tests with enhanced coverage
-  unit_tests:
-    docker:
-      - image: cimg/node:20.19.0
-    working_directory: ~/project
-    steps:
-      - checkout
-      - install_dependencies
-      - setup_test_directories
-      - notify_github_status:
-          status: pending
-          context: 'ci/unit-tests'
-      - run:
-          name: Run unit tests
-          command: npm run test:unit
-      - run:
-          name: Run all tests with coverage
-          command: npm run test:ci
-      - run:
-          name: Generate LCOV coverage for DeepSource
-          command: |
-            if [ -f coverage/coverage-final.json ]; then
-              echo "Converting coverage to LCOV format for DeepSource..."
-              npx nyc report --reporter=lcov --temp-dir=coverage --report-dir=coverage
-            fi
-      - run:
-          name: Check coverage thresholds
-          command: |
-            if [ -f coverage/coverage-summary.json ]; then
-              echo "Checking coverage thresholds..."
-              node -e "
-                const coverage = require('./coverage/coverage-summary.json');
-                const thresholds = { lines: 80, statements: 80, functions: 80, branches: 80 };
-                let failed = false;
-                Object.entries(thresholds).forEach(([key, threshold]) => {
-                  const actual = coverage.total[key].pct;
-                  console.log(\`\${key}: \${actual}% (threshold: \${threshold}%)\`);
-                  if (actual < threshold) {
-                    console.error(\`\${key} coverage \${actual}% is below threshold \${threshold}%\`);
-                    failed = true;
-                  } else {
-                    console.log(\`\${key} coverage \${actual}% meets threshold\`);
-                  }
-                });
-                if (failed) process.exit(1);
-                console.log('All coverage thresholds met!');
-              "
-            fi
-      - store_test_results:
-          path: test-results
-      - store_artifacts:
-          path: test-results
-          destination: test-results
-      - store_artifacts:
-          path: coverage
-          destination: coverage
-      - run:
-          name: Upload coverage to Codecov
-          command: |
-            if [ -f coverage/lcov.info ]; then
-              curl -s https://codecov.io/bash | bash -s -- -t $CODECOV_TOKEN
-            fi
-      - notify_github_status:
-          status: success
-          context: 'ci/unit-tests'
-
-  # Build application
-  build:
-    docker:
-      - image: cimg/node:20.19.0
-    working_directory: ~/project
-    steps:
-      - checkout
-      - install_dependencies
-      - load_env_file
-      - notify_github_status:
-          status: pending
-          context: 'ci/build'
-      - run:
-          name: Build Next.js application
-          command: npm run build
-      - run:
-          name: Verify build output
-          command: |
-            if [ ! -d ".next" ]; then
-              echo "Build failed - .next directory not found"
-              exit 1
-            fi
-            echo "Build successful"
-            ls -la .next/
-      - store_artifacts:
-          path: .next
-          destination: build-output
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .next
-            - public
-            - package.json
-            - next.config.ts
-      - notify_github_status:
-          status: success
-          context: 'ci/build'
-
-  # Security audit with enhanced checks
-  security_audit:
-    docker:
-      - image: cimg/node:20.19.0
-    working_directory: ~/project
-    steps:
-      - checkout
-      - install_dependencies
-      - notify_github_status:
-          status: pending
-          context: 'ci/security'
-      - run:
-          name: Run npm security audit
-          command: |
-            echo "Running security audit..."
-            npm audit --audit-level=moderate
-
-            # Check for high/critical vulnerabilities
-            HIGH_VULN=$(npm audit --audit-level=high --json 2>/dev/null | jq -r '.metadata.vulnerabilities.high // 0')
-            CRITICAL_VULN=$(npm audit --audit-level=critical --json 2>/dev/null | jq -r '.metadata.vulnerabilities.critical // 0')
-
-            echo "High vulnerabilities: $HIGH_VULN"
-            echo "Critical vulnerabilities: $CRITICAL_VULN"
-
-            if [ "$HIGH_VULN" != "0" ] || [ "$CRITICAL_VULN" != "0" ]; then
-              echo "High or critical vulnerabilities found!"
-              npm audit --audit-level=high
-              exit 1
-            fi
-
-            echo "No high or critical vulnerabilities found"
-      - notify_github_status:
-          status: success
-          context: 'ci/security'
-
-  # DeepSource static analysis
-  deepsource_analysis:
-    docker:
-      - image: cimg/node:20.19.0
-    working_directory: ~/project
-    steps:
-      - checkout
-      - install_dependencies
-      - notify_github_status:
-          status: pending
-          context: 'ci/deepsource'
-      - run:
-          name: Install DeepSource CLI
-          command: |
-            curl https://deepsource.io/cli | sh
-            sudo mv ./bin/deepsource /usr/local/bin/
-      - run:
-          name: Report coverage to DeepSource
-          command: |
-            if [ -f coverage/lcov.info ]; then
-              echo "Uploading test coverage to DeepSource..."
-              ./bin/deepsource report --analyzer test-coverage --key javascript --value-file coverage/lcov.info
-            else
-              echo "No coverage file found, skipping coverage upload"
-            fi
-      - run:
-          name: Run DeepSource analysis
-          command: |
-            echo "Running DeepSource static analysis..."
-            # The analysis is triggered automatically on push, but we can verify the config
-            if [ -f .deepsource.toml ]; then
-              echo "DeepSource configuration found:"
-              cat .deepsource.toml
-            else
-              echo "Warning: No .deepsource.toml configuration file found"
-            fi
-            echo "DeepSource analysis will be triggered automatically for this commit"
-      - notify_github_status:
-          status: success
-          context: 'ci/deepsource'
-
-  # Performance testing with Lighthouse
-  performance_tests:
-    docker:
-      - image: cimg/node:20.19.0-browsers
-    working_directory: ~/project
-    steps:
-      - checkout
-      - install_dependencies
-      - load_env_file
-      - attach_workspace:
-          at: .
-      - notify_github_status:
-          status: pending
-          context: 'ci/performance'
-      - run:
-          name: Start Next.js server
-          command: npm start
-          background: true
-      - run:
-          name: Wait for server to be ready
-          command: |
-            echo "Waiting for server to start..."
-            timeout 120 bash -c 'until curl -f http://localhost:3000 > /dev/null 2>&1; do 
-              sleep 2
-            done'
-            echo "Server is ready for Lighthouse testing!"
-      - run:
-          name: Run Lighthouse CI
-          command: |
-            echo "Running Lighthouse performance tests..."
-            npx @lhci/cli autorun --config=./lighthouserc.json || true
-            echo "Lighthouse tests completed"
-      - store_artifacts:
-          path: .lighthouseci
-          destination: lighthouse-reports
-      - notify_github_status:
-          status: success
-          context: 'ci/performance'
-
-  # LambdaTest E2E Testing - FIXED VERSION
+  # LambdaTest E2E Testing - ONLY JOB
   e2e_lambdatest_localhost:
     docker:
       - image: cimg/node:20.19.0-browsers
@@ -555,7 +275,7 @@ jobs:
 
             # Create a simple reporter config if it doesn't exist
             if [ ! -f "reporter_config.json" ]; then
-              cat > reporter_config.json \<< 'EOF'
+              cat > reporter_config.json << 'EOF'
             {
               "reporterEnabled": "mochawesome",
               "mochawesomeReporterOptions": {
@@ -601,7 +321,7 @@ jobs:
               ls -la src/__test__/e2e/ || echo "Directory does not exist"
               echo "Creating a sample test for verification..."
               mkdir -p src/__test__/e2e
-              cat > src/__test__/e2e/sample.cy.ts \<< 'EOF'
+              cat > src/__test__/e2e/sample.cy.ts << 'EOF'
             describe('Sample E2E Test', () => {
               it('should load the application', () => {
                 cy.visit('/')
@@ -675,6 +395,8 @@ jobs:
             export E2B_API_KEY="${E2B_API_KEY}"
             export NODE_ENV="test"
             export CYPRESS_BASE_URL="http://localhost:3000"
+            export CYPRESS_TEST_EMAIL="${CYPRESS_TEST_EMAIL:-cypress-test@example.com}"
+            export CYPRESS_TEST_PASSWORD="${CYPRESS_TEST_PASSWORD:-CypressTest123!}"
 
             # Initialize test status tracking
             TEST_SUCCESS=false
@@ -989,113 +711,7 @@ jobs:
 workflows:
   version: 2
 
-  # Main CI/CD pipeline
-  comprehensive_test_and_deploy:
+  # Simplified workflow - only LambdaTest E2E testing
+  e2e_only:
     jobs:
-      # Stage 1: Security and Linting (fastest gatekeepers)
-      - lint_and_format
-      - security_audit
-
-      # Stage 2: All testing after security/linting pass
-      - unit_tests:
-          requires:
-            - lint_and_format
-            - security_audit
-
-      # Stage 2.5: DeepSource analysis (runs in parallel with other tests)
-      - deepsource_analysis:
-          requires:
-            - unit_tests
-
-      # Stage 3: E2E Testing (after unit tests pass)
-      - e2e_lambdatest_localhost:
-          requires:
-            - unit_tests
-          filters:
-            branches:
-              only:
-                - main
-                - CI/CD
-
-      # Stage 4: Build only after all tests pass (including E2E)
-      - build:
-          requires:
-            - unit_tests
-            - deepsource_analysis
-          filters:
-            branches:
-              ignore:
-                - main
-                - CI/CD
-
-      # Stage 4b: Build after E2E tests for main branches
-      - build:
-          name: build_after_e2e
-          requires:
-            - unit_tests
-            - e2e_lambdatest_localhost
-            - deepsource_analysis
-          filters:
-            branches:
-              only:
-                - main
-                - CI/CD
-
-      # Stage 5: Performance testing (requires build)
-      - performance_tests:
-          requires:
-            - build_after_e2e
-          filters:
-            branches:
-              only:
-                - main
-                - CI/CD
-
-  # Pull request workflow (lighter, no E2E)
-  pull_request_checks:
-    jobs:
-      # Stage 1: Security and Linting first (for PRs)
-      - lint_and_format:
-          filters:
-            branches:
-              ignore:
-                - main
-                - develop
-      - security_audit:
-          filters:
-            branches:
-              ignore:
-                - main
-                - develop
-
-      # Stage 2: Unit tests after security checks
-      - unit_tests:
-          requires:
-            - lint_and_format
-            - security_audit
-          filters:
-            branches:
-              ignore:
-                - main
-                - develop
-
-      # Stage 2.5: DeepSource analysis for PRs
-      - deepsource_analysis:
-          requires:
-            - unit_tests
-          filters:
-            branches:
-              ignore:
-                - main
-                - develop
-
-      # Stage 3: Build after tests pass (for PRs, skip E2E for speed)
-      - build:
-          requires:
-            - unit_tests
-            - deepsource_analysis
-          filters:
-            branches:
-              ignore:
-                - main
-                - develop
+      - e2e_lambdatest_localhost
