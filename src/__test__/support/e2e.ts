@@ -1,4 +1,5 @@
 /// <reference types="cypress" />
+/// <reference path="./index.d.ts" />
 
 // Cypress E2E support file
 // This file is processed and loaded automatically before your test files
@@ -68,20 +69,11 @@ Cypress.Commands.add('setDesktopViewport', () => {
 
 // Wait for application to be ready
 Cypress.Commands.add('waitForApp', () => {
-  cy.visit('/', { timeout: 30000 })
+  cy.visit('/', { timeout: 10000 })
   cy.get('body').should('be.visible')
 
-  // Wait for the page to fully load and any initial API calls to complete
-  if (Cypress.env('lambdatest')) {
-    // Longer wait for LambdaTest environment
-    cy.wait(3000)
-  } else {
-    // Shorter wait for local environment
-    cy.wait(1000)
-  }
-
-  // Ensure the page is interactive
-  cy.get('body').should('be.visible').and('not.have.class', 'loading')
+  // Wait for React hydration and initial render
+  cy.get('main, [data-testid="app-content"], #__next').should('be.visible', { timeout: 5000 })
 })
 
 // Custom commands are declared in src/__test__/support/index.d.ts

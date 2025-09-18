@@ -14,10 +14,10 @@ export default defineConfig({
     viewportHeight: 720,
     video: false,
     screenshotOnRunFailure: false,
-    defaultCommandTimeout: 30000,
-    requestTimeout: 30000,
-    responseTimeout: 30000,
-    pageLoadTimeout: 90000,
+    defaultCommandTimeout: 10000,
+    requestTimeout: 15000,
+    responseTimeout: 15000,
+    pageLoadTimeout: 30000,
     experimentalStudio: true, // Enable Cypress Studio for visual test generation
     experimentalRunAllSpecs: true, // Enable "Run All Specs" UI feature
     experimentalOriginDependencies: true, // Enable Cypress.require within cy.origin
