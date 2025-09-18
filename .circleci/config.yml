@@ -406,7 +406,7 @@ jobs:
             echo "Starting LambdaTest execution with automatic tunnel..."
 
             # Verify the command we're about to run
-            echo "Command to execute: npm run lambdatest:run"
+            echo "Command to execute: npx lambdatest-cypress run --config-file=lambdatest-config.json --cy=\"--config-file cypress.config.ts\""
             echo "LambdaTest CLI is available: $(which lambdatest-cypress || echo 'Not found in PATH')"
 
             # Test LambdaTest CLI connectivity
@@ -423,9 +423,20 @@ jobs:
 
             echo "LambdaTest CLI version: $(npx lambdatest-cypress --version 2>/dev/null || echo 'Version check failed')"
 
-            # Show the actual command that will be executed
-            echo "Full command from package.json:"
-            grep "lambdatest:run" package.json
+            # Validate LambdaTest configuration before execution
+            echo "Validating LambdaTest configuration..."
+            if ! jq -e '.run_settings.specs' lambdatest-config.json > /dev/null; then
+              echo "ERROR: Invalid specs configuration in lambdatest-config.json"
+              exit 1
+            fi
+
+            # Show configuration summary
+            echo "LambdaTest Configuration Summary:"
+            echo "  Build Name: $(jq -r '.run_settings.build_name' lambdatest-config.json)"
+            echo "  Specs Pattern: $(jq -r '.run_settings.specs' lambdatest-config.json)"
+            echo "  Base URL: $(jq -r '.run_settings.baseUrl' lambdatest-config.json)"
+            echo "  Headless: $(jq -r '.run_settings.headless' lambdatest-config.json)"
+            echo "  Tunnel: $(jq -r '.tunnel_settings.tunnel' lambdatest-config.json)"
 
             # Debug: Show current directory and file structure
             echo "Current working directory: $(pwd)"
@@ -475,10 +486,47 @@ jobs:
             echo "Running all E2E tests in a single LambdaTest build..."
 
             # Run LambdaTest with the main configuration file
-            timeout 1200 lambdatest-cypress run --config-file="lambdatest-config.json" --cy="--config-file cypress.config.ts" 2>&1 | tee "lambdatest-output.log" || {
+            echo "Executing LambdaTest command directly..."
+            echo "Starting LambdaTest with 10-minute timeout to prevent hanging..."
+
+            # Use a shorter timeout to prevent infinite hanging
+            # Run LambdaTest in background and monitor for hanging patterns
+            timeout 600 npx lambdatest-cypress run --config-file="lambdatest-config.json" --cy="--config-file cypress.config.ts" 2>&1 | tee "lambdatest-output.log" &
+            LT_PID=$!
+
+            # Monitor for hanging patterns
+            sleep 30  # Give it time to start
+            for i in {1..18}; do  # Check every 30 seconds for 9 minutes
+              if ! kill -0 $LT_PID 2>/dev/null; then
+                echo "LambdaTest process completed"
+                wait $LT_PID
+                LAMBDATEST_EXIT_CODE=$?
+                break
+              fi
+              
+              # Check for hanging indicators in the log
+              if [ -f "lambdatest-output.log" ]; then
+                if tail -20 "lambdatest-output.log" | grep -q "Waiting for"; then
+                  echo "WARNING: Detected 'Waiting for' message - possible hang at iteration $i"
+                fi
+              fi
+              
+              echo "LambdaTest still running... (check $i/18)"
+              sleep 30
+            done
+
+            # If we get here and process is still running, it's likely hung
+            if kill -0 $LT_PID 2>/dev/null; then
+              echo "ERROR: LambdaTest appears to be hung, terminating..."
+              kill -TERM $LT_PID 2>/dev/null || true
+              sleep 5
+              kill -KILL $LT_PID 2>/dev/null || true
+              LAMBDATEST_EXIT_CODE=124
+            fi || {
               TIMEOUT_EXIT=$?
               if [ $TIMEOUT_EXIT -eq 124 ]; then
-                echo "ERROR: LambdaTest execution timed out"
+                echo "ERROR: LambdaTest execution timed out after 10 minutes"
+                echo "This usually indicates a configuration issue or infinite wait"
                 LAMBDATEST_EXIT_CODE=124
               else
                 echo "LambdaTest command failed with exit code: $TIMEOUT_EXIT"
