@@ -4,7 +4,8 @@
 
 describe('Performance and Accessibility E2E Tests', () => {
   beforeEach(() => {
-    cy.waitForApp()
+    cy.visit('/')
+    cy.get('body').should('be.visible')
   })
 
   describe('Performance Tests', () => {

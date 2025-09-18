@@ -18,10 +18,6 @@ export default defineConfig({
     requestTimeout: 15000,
     responseTimeout: 15000,
     pageLoadTimeout: 30000,
-    experimentalStudio: true, // Enable Cypress Studio for visual test generation
-    experimentalRunAllSpecs: true, // Enable "Run All Specs" UI feature
-    experimentalOriginDependencies: true, // Enable Cypress.require within cy.origin
-    experimentalMemoryManagement: true, // Enable memory management improvements
     setupNodeEvents(on, config) {
       // LambdaTest specific setup
       on('task', {

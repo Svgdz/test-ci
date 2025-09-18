@@ -89,7 +89,7 @@ describe('AI Code Generation E2E Tests', () => {
       cy.get('button[type="submit"]').click()
 
       /* The main test: verify the API call is made and succeeds */
-      cy.wait('@createProject', { timeout: 120000 }).then((interception) => {
+      cy.wait('@createProject', { timeout: 30000 }).then((interception) => {
         expect(interception.response?.statusCode).to.equal(200)
         expect(interception.response?.body).to.have.property('type', 'redirect')
         expect(interception.response?.body).to.have.property('projectId')
@@ -144,7 +144,7 @@ describe('AI Code Generation E2E Tests', () => {
       cy.contains('Creating project...').should('be.visible')
 
       /* Wait for completion and success toast - E2B sandbox creation takes time */
-      cy.contains('Project ready', { timeout: 120000 }).should('be.visible')
+      cy.contains('Project ready', { timeout: 30000 }).should('be.visible')
     })
 
     it('should handle real workspace navigation after project creation', () => {
@@ -158,7 +158,7 @@ describe('AI Code Generation E2E Tests', () => {
       cy.get('button[type="submit"]').click()
 
       /* Wait for redirect to workspace - E2B sandbox creation and setup takes time */
-      cy.url({ timeout: 120000 }).should('include', '/workspace/')
+      cy.url({ timeout: 30000 }).should('include', '/workspace/')
 
       /* Should be in the workspace page */
       cy.get('body').should('be.visible')

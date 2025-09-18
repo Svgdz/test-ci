@@ -22,7 +22,7 @@
       "package.json"
     ],
     "parallels": 1,
-    "specs": "src/__test__/e2e/simple-test.cy.ts",
+    "specs": "src/__test__/e2e/ai-features.cy.ts",
     "ignore_files": "",
     "network": true,
     "headless": true,

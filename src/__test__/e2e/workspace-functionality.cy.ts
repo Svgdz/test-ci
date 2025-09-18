@@ -4,7 +4,8 @@
 
 describe('Workspace Functionality E2E Tests', () => {
   beforeEach(() => {
-    cy.waitForApp()
+    cy.visit('/')
+    cy.get('body').should('be.visible')
   })
 
   describe('Workspace Panel Navigation', () => {
@@ -37,7 +38,7 @@ describe('Workspace Functionality E2E Tests', () => {
           cy.get('button[type="submit"]').click()
 
           /* Wait for project creation and redirect */
-          cy.url({ timeout: 120000 }).should('include', '/workspace/')
+          cy.url({ timeout: 30000 }).should('include', '/workspace/')
         }
       })
 
@@ -161,7 +162,7 @@ describe('Workspace Functionality E2E Tests', () => {
           /* Create project if none exist */
           cy.get('textarea[name="prompt"]').type('Create a React app for state testing')
           cy.get('button[type="submit"]').click()
-          cy.url({ timeout: 120000 }).should('include', '/workspace/')
+          cy.url({ timeout: 30000 }).should('include', '/workspace/')
         }
       })
 
@@ -226,7 +227,7 @@ describe('Workspace Functionality E2E Tests', () => {
           /* Create project if none exist */
           cy.get('textarea[name="prompt"]').type('Create a React app for keyboard testing')
           cy.get('button[type="submit"]').click()
-          cy.url({ timeout: 120000 }).should('include', '/workspace/')
+          cy.url({ timeout: 30000 }).should('include', '/workspace/')
         }
       })
 
@@ -450,7 +451,7 @@ describe('Workspace Functionality E2E Tests', () => {
             /* Create project if none exist */
             cy.get('textarea[name="prompt"]').type('Create a React app for preview testing')
             cy.get('button[type="submit"]').click()
-            cy.url({ timeout: 120000 }).should('include', '/workspace/')
+            cy.url({ timeout: 30000 }).should('include', '/workspace/')
           }
         })
 
@@ -492,7 +493,7 @@ describe('Workspace Functionality E2E Tests', () => {
             /* Create project if none exist */
             cy.get('textarea[name="prompt"]').type('Create a React app for refresh testing')
             cy.get('button[type="submit"]').click()
-            cy.url({ timeout: 120000 }).should('include', '/workspace/')
+            cy.url({ timeout: 30000 }).should('include', '/workspace/')
           }
         })
 
@@ -528,7 +529,7 @@ describe('Workspace Functionality E2E Tests', () => {
             /* Create project if none exist */
             cy.get('textarea[name="prompt"]').type('Create a React app for sync testing')
             cy.get('button[type="submit"]').click()
-            cy.url({ timeout: 120000 }).should('include', '/workspace/')
+            cy.url({ timeout: 30000 }).should('include', '/workspace/')
           }
         })
 
@@ -583,7 +584,7 @@ describe('Workspace Functionality E2E Tests', () => {
             /* Create project if none exist */
             cy.get('textarea[name="prompt"]').type('Create a React app for settings testing')
             cy.get('button[type="submit"]').click()
-            cy.url({ timeout: 120000 }).should('include', '/workspace/')
+            cy.url({ timeout: 30000 }).should('include', '/workspace/')
           }
         })
 
@@ -621,7 +622,7 @@ describe('Workspace Functionality E2E Tests', () => {
               'Create a React app for settings navigation testing'
             )
             cy.get('button[type="submit"]').click()
-            cy.url({ timeout: 120000 }).should('include', '/workspace/')
+            cy.url({ timeout: 30000 }).should('include', '/workspace/')
           }
         })
 
@@ -672,7 +673,7 @@ describe('Workspace Functionality E2E Tests', () => {
             /* Create project if none exist */
             cy.get('textarea[name="prompt"]').type('Create a React app for settings form testing')
             cy.get('button[type="submit"]').click()
-            cy.url({ timeout: 120000 }).should('include', '/workspace/')
+            cy.url({ timeout: 30000 }).should('include', '/workspace/')
           }
         })
 
@@ -846,7 +847,7 @@ describe('Workspace Functionality E2E Tests', () => {
             /* Create project if none exist */
             cy.get('textarea[name="prompt"]').type('Create a React app for chat testing')
             cy.get('button[type="submit"]').click()
-            cy.url({ timeout: 120000 }).should('include', '/workspace/')
+            cy.url({ timeout: 30000 }).should('include', '/workspace/')
           }
         })
 
