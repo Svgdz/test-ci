@@ -191,28 +191,48 @@ jobs:
             echo "Starting LambdaTest execution..."
             echo "Build: AIBEXX-E2E-${CIRCLE_BUILD_NUM}"
 
+            # Run LambdaTest and capture both exit code and output
+            set +e  # Don't exit on error yet
             npx lambdatest-cypress run \
               --config-file="lambdatest-config.json" \
               --cy="--config-file cypress.config.ts --browser chrome" \
               2>&1 | tee "lambdatest-output.log"
 
             LAMBDATEST_EXIT_CODE=$?
+            set -e  # Re-enable exit on error
 
-            # Show output and check for errors
             echo "=== LAMBDATEST OUTPUT ==="
             cat lambdatest-output.log
+            echo "=== END OUTPUT ==="
+            echo "LambdaTest CLI exit code: $LAMBDATEST_EXIT_CODE"
 
-            if grep -qi "could not execute cypress run command\|Some Error occured on Lambdatest Server" lambdatest-output.log; then
-              echo "ERROR: LambdaTest execution failed"
+            # Validation 1: Check for critical errors
+            if grep -qi "could not execute cypress run command\|Some Error occured on Lambdatest Server\|tunnel.*error\|authentication.*failed" lambdatest-output.log; then
+              echo "❌ CRITICAL ERROR: LambdaTest execution failed"
               exit 1
             fi
 
-            if [ $LAMBDATEST_EXIT_CODE -eq 0 ]; then
-              echo "SUCCESS: E2E tests passed"
+            # Validation 2: Ensure tests actually ran (not just CLI success)
+            if ! grep -qi "running\|spec\|test\|it(" lambdatest-output.log; then
+              echo "❌ ERROR: No tests appear to have run"
+              exit 1
+            fi
+
+            # Validation 3: Check CLI exit code
+            if [ $LAMBDATEST_EXIT_CODE -ne 0 ]; then
+              echo "❌ FAILURE: LambdaTest CLI failed (exit code: $LAMBDATEST_EXIT_CODE)"
+              exit 1
+            fi
+
+            # Validation 4: Verify we got actual test results
+            if grep -qi "passing\|failing\|✓\|✗\|passed\|failed" lambdatest-output.log; then
+              echo "✅ SUCCESS: Tests executed and completed"
             else
-              echo "FAILURE: E2E tests failed (exit code: $LAMBDATEST_EXIT_CODE)"
+              echo "❌ WARNING: No clear test results found - possible incomplete execution"
               exit 1
             fi
+
+            echo "✅ All validations passed - E2E tests completed successfully"
 
       # Store test artifacts
       - store_test_results:
