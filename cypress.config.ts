@@ -7,6 +7,7 @@ import { defineConfig } from 'cypress'
 export default defineConfig({
   experimentalWebKitSupport: true,
   e2e: {
+    baseUrl: process.env.CYPRESS_BASE_URL || 'http://localhost:3000',
     supportFile: 'src/__test__/support/e2e.ts',
     specPattern: 'src/__test__/e2e/**/*.cy.{js,jsx,ts,tsx}',
     setupNodeEvents(on, config) {
@@ -15,7 +16,6 @@ export default defineConfig({
     env: {
       // LambdaTest environment variables
       lambdatest: true,
-      // Pass through required environment variables
       NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
       SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
