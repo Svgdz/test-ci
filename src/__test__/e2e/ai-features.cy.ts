@@ -1,3 +1,5 @@
+/// <reference types="cypress" />
+/// <reference types="cypress-wait-until" />
 /// <reference path="../support/index.d.ts" />
 
 import { testScenarios } from '../helpers/test-data'

@@ -12,11 +12,17 @@ export default defineConfig({
     setupNodeEvents(on, config) {
       return config
     },
-  },
-
-  modifyObstructiveCode: false,
-  retries: {
-    runMode: 2,
-    openMode: 0,
+    env: {
+      // LambdaTest environment variables
+      lambdatest: true,
+      // Pass through required environment variables
+      NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      E2B_API_KEY: process.env.E2B_API_KEY,
+      NODE_ENV: process.env.NODE_ENV || 'test',
+      CYPRESS_TEST_EMAIL: process.env.CYPRESS_TEST_EMAIL || 'cypress-test@example.com',
+      CYPRESS_TEST_PASSWORD: process.env.CYPRESS_TEST_PASSWORD || 'CypressTest123!',
+    },
   },
 })
