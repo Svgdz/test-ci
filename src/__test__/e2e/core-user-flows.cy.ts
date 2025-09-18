@@ -4,8 +4,7 @@
 
 describe('Core User Flows E2E Tests', () => {
   beforeEach(() => {
-    cy.visit('/')
-    cy.get('body').should('be.visible')
+    cy.waitForApp()
   })
 
   describe('Homepage & Project Creation', () => {

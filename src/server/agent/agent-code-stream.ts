@@ -316,57 +316,39 @@ function parseAIResponse(response: string): ParsedResponse {
 
 /**
  * Ensure sandbox provider is available
- * Creates new sandbox or reconnects to existing one
+ * Creates new sandbox, reconnects to existing one, or resumes paused sandbox
  */
 async function ensureProviderForSandbox(sandboxId?: string): Promise<SandboxProvider> {
-  const fromManager = sandboxId
-    ? sandboxManager.getProvider(sandboxId)
-    : sandboxManager.getActiveProvider()
-  if (fromManager) return fromManager
-
-  if (sandboxId) {
-    try {
-      // Try to reconnect to existing sandbox
-      const provider = SandboxFactory.create()
-
-      // For E2B, we need to reconnect to the existing sandbox
-      // This is a simplified approach - in production you'd want proper reconnection logic
-      const hasReconnect = (
-        p: SandboxProvider
-      ): p is SandboxProvider & { reconnect: (id: string) => Promise<boolean> } => {
-        return (
-          typeof (p as { reconnect?: (id: string) => Promise<boolean> }).reconnect === 'function'
-        )
-      }
-
-      if (hasReconnect(provider)) {
-        const reconnected = await provider.reconnect(sandboxId)
-        if (reconnected) {
-          sandboxManager.registerSandbox(sandboxId, provider)
-          sandboxManager.setActiveSandbox(sandboxId)
-          return provider
-        }
-      }
-
-      // If reconnection fails or isn't supported, create new sandbox
-      const info = await provider.createSandbox()
-      await provider.setupViteApp()
-      sandboxManager.registerSandbox(info.sandboxId, provider)
-      sandboxManager.setActiveSandbox(info.sandboxId)
-      return provider
-    } catch (e) {
-      const err = e as Error
-      throw new Error(`Failed to prepare provider for sandbox ${sandboxId}: ${err.message}`)
-    }
+  // CRITICAL: sandboxId must be provided for AI generation
+  if (!sandboxId) {
+    console.error(
+      `[ensureProviderForSandbox] No sandboxId provided - AI generation should always have a sandbox from project creation`
+    )
+    throw new Error(
+      `No sandboxId provided for AI generation - sandbox should have been created during project initialization`
+    )
   }
 
-  // No sandboxId provided - create new sandbox
-  const provider = SandboxFactory.create()
-  const info = await provider.createSandbox()
-  await provider.setupViteApp()
-  sandboxManager.registerSandbox(info.sandboxId, provider)
-  sandboxManager.setActiveSandbox(info.sandboxId)
-  return provider
+  try {
+    // Use the centralized manager to get or reconnect to the existing sandbox
+    // This will NEVER create a new sandbox, only reconnect to existing ones
+    const provider = await sandboxManager.getOrReconnectProvider(sandboxId)
+
+    console.log(
+      `[ensureProviderForSandbox] Successfully obtained provider for sandbox: ${sandboxId}`
+    )
+    return provider
+  } catch (error) {
+    console.error(
+      `[ensureProviderForSandbox] Failed to get provider for sandbox ${sandboxId}:`,
+      error
+    )
+
+    // CRITICAL: Do NOT create new sandbox - it should already exist
+    throw new Error(
+      `Failed to get provider for sandbox ${sandboxId} - sandbox should have been created during project initialization. Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+    )
+  }
 }
 
 /**

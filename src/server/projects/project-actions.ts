@@ -22,8 +22,8 @@ import { SupabaseVaultManager } from '@/server/vault'
 import type { SupabaseRpcClient } from '@/server/vault/supabase-vault'
 
 /**
- * Create a new project with associated sandbox and database record
- * This handles the complete project creation pipeline
+ * Create a new project record in database (fast operation)
+ * Sandbox creation is handled separately in workspace initialization
  */
 export const createProject = authActionClient
   .schema(CreateProjectSchema)
@@ -37,45 +37,6 @@ export const createProject = authActionClient
         key: 'create_project:start',
         prompt: prompt.substring(0, 100),
         template,
-        userId: session.user.id,
-      })
-
-      // Create sandbox using the new system (E2B v2)
-      let sandboxId: string
-      try {
-        const provider = SandboxFactory.create()
-        const sandboxInfo = await provider.createSandbox()
-
-        // Initialize Vite React app inside sandbox
-        await provider.setupViteApp()
-
-        // Register with manager
-        sandboxManager.registerSandbox(sandboxInfo.sandboxId, provider)
-
-        sandboxId = sandboxInfo.sandboxId
-      } catch (sandboxError) {
-        l.error({
-          key: 'create_project:sandbox_failed',
-          error: sandboxError,
-          template,
-          userId: session.user.id,
-        })
-
-        if (
-          sandboxError instanceof Error &&
-          sandboxError.message.includes('E2B API key not configured')
-        ) {
-          return returnServerError('E2B API key is not configured. Please contact support.')
-        }
-
-        return returnServerError(
-          `Failed to create sandbox: ${sandboxError instanceof Error ? sandboxError.message : 'Unknown sandbox error'}`
-        )
-      }
-
-      l.info({
-        key: 'create_project:sandbox_created',
-        sandboxId,
         userId: session.user.id,
       })
 
@@ -98,21 +59,20 @@ export const createProject = authActionClient
         )
       })()
 
-      // Create project record in database using authenticated client
-
+      // Create project record in database without sandbox (fast operation)
       // Note: slug is a generated column and must be omitted from insert
       const projectData = {
         account_id: session.user.id,
         name: projectName,
         description: prompt,
-        sandbox_id: sandboxId,
+        sandbox_id: null, // Will be set during workspace initialization
         template,
         created_by: session.user.id,
-        sandbox_status: 'active',
+        sandbox_status: null, // Will be set to 'active' when sandbox is created
         sandbox_last_active: new Date().toISOString(),
         visibility: 'private',
         ai_model: 'claude-3-5-sonnet-20241022',
-        default_domain: `${sandboxId}.e2b.dev`,
+        default_domain: 'https://initializing.placeholder.e2b.dev', // Placeholder - will be set when sandbox is created
       } as TablesInsert<'projects'>
 
       const { data: project, error: dbError } = await supabase
@@ -143,11 +103,10 @@ export const createProject = authActionClient
       l.info({
         key: 'create_project:success',
         projectId: (project as Tables<'projects'>).id,
-        sandboxId,
         userId: session.user.id,
       })
 
-      // Return project data for client-side redirect
+      // Return project data for immediate client-side redirect
       return { project }
     } catch (error: unknown) {
       l.error({
@@ -163,6 +122,238 @@ export const createProject = authActionClient
       }
 
       return returnServerError('Failed to create project: Unknown error')
+    }
+  })
+
+/**
+ * Initialize workspace with sandbox creation and setup
+ * This is called asynchronously from the workspace page
+ */
+export const initializeWorkspace = authActionClient
+  .schema(GetProjectSchema) // Reuse the same schema that takes projectId
+  .metadata({ actionName: 'initializeWorkspace' })
+  .action(async ({ parsedInput, ctx }) => {
+    const { projectId } = parsedInput
+    const { session, supabase } = ctx
+
+    try {
+      l.info({
+        key: 'initialize_workspace:start',
+        projectId,
+        userId: session.user.id,
+      })
+
+      // Get project to verify ownership and get template/description
+      const { data: project, error: projectError } = await supabase
+        .from('projects')
+        .select('*')
+        .eq('id', projectId)
+        .eq('account_id', session.user.id)
+        .single()
+
+      if (projectError || !project) {
+        l.error({
+          key: 'initialize_workspace:project_not_found',
+          error: projectError,
+          projectId,
+          userId: session.user.id,
+        })
+        return returnServerError('Project not found')
+      }
+
+      const typedProject = project as Tables<'projects'>
+
+      // Skip if already has active sandbox
+      if (typedProject.sandbox_id && typedProject.sandbox_status === 'active') {
+        l.info({
+          key: 'initialize_workspace:already_initialized',
+          projectId,
+          sandboxId: typedProject.sandbox_id,
+          userId: session.user.id,
+        })
+        return {
+          project: typedProject,
+          alreadyInitialized: true,
+          sandboxId: typedProject.sandbox_id,
+          sandboxUrl: typedProject.default_domain,
+          message: 'Workspace already initialized',
+        }
+      }
+
+      // Use atomic update to prevent race conditions - only proceed if sandbox_status is null or failed
+      // Use sandbox_metadata to track initialization state since 'initializing' is not allowed in sandbox_status
+      const initializationMetadata = {
+        initializing: true,
+        startedAt: new Date().toISOString(),
+        userId: session.user.id,
+      }
+
+      const { data: lockResult, error: lockError } = await supabase
+        .from('projects')
+        .update({
+          sandbox_metadata: initializationMetadata,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', projectId)
+        .eq('account_id', session.user.id)
+        .is('sandbox_id', null) // Only update if sandbox_id is still null
+        .select()
+        .single()
+
+      if (lockError || !lockResult) {
+        // Another process is already initializing or project already has sandbox
+        l.info({
+          key: 'initialize_workspace:concurrent_initialization',
+          projectId,
+          userId: session.user.id,
+          lockError: lockError?.message,
+        })
+
+        // Re-fetch to get current state
+        const { data: currentProject } = await supabase
+          .from('projects')
+          .select('*')
+          .eq('id', projectId)
+          .eq('account_id', session.user.id)
+          .single()
+
+        const typedCurrentProject = currentProject as Tables<'projects'>
+        if (typedCurrentProject?.sandbox_id && typedCurrentProject.sandbox_status === 'active') {
+          return {
+            project: typedCurrentProject,
+            alreadyInitialized: true,
+            sandboxId: typedCurrentProject.sandbox_id,
+            sandboxUrl: typedCurrentProject.default_domain,
+            message: 'Workspace already initialized by another process',
+          }
+        }
+
+        return returnServerError('Another initialization is already in progress')
+      }
+
+      // Create sandbox using the centralized manager (single source of truth)
+      let sandboxId: string
+      let sandboxUrl: string
+      try {
+        // Initialize database sync first
+        sandboxManager.initializeDatabaseSync(supabase)
+
+        // Create sandbox through manager - this is the ONLY place sandboxes are created
+        // Pass project ID to prevent duplicate creation
+        const sandboxInfo = await sandboxManager.createNewSandbox(projectId)
+
+        // Initialize Vite React app inside sandbox
+        await sandboxInfo.provider.setupViteApp()
+
+        sandboxId = sandboxInfo.sandboxId
+        sandboxUrl = sandboxInfo.url
+      } catch (sandboxError) {
+        l.error({
+          key: 'initialize_workspace:sandbox_failed',
+          error: sandboxError,
+          projectId,
+          template: typedProject.template,
+          userId: session.user.id,
+        })
+
+        // Update project status to failed
+        await supabase
+          .from('projects')
+          .update({
+            sandbox_status: 'failed',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', projectId)
+
+        if (
+          sandboxError instanceof Error &&
+          sandboxError.message.includes('E2B API key not configured')
+        ) {
+          return returnServerError('E2B API key is not configured. Please contact support.')
+        }
+
+        return returnServerError(
+          `Failed to create sandbox: ${sandboxError instanceof Error ? sandboxError.message : 'Unknown sandbox error'}`
+        )
+      }
+
+      l.info({
+        key: 'initialize_workspace:sandbox_created',
+        projectId,
+        sandboxId,
+        userId: session.user.id,
+      })
+
+      // Update project with sandbox information
+      const { data: updatedProject, error: updateError } = await supabase
+        .from('projects')
+        .update({
+          sandbox_id: sandboxId,
+          sandbox_status: 'active',
+          sandbox_last_active: new Date().toISOString(),
+          default_domain: sandboxUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', projectId)
+        .select()
+        .single()
+
+      if (updateError) {
+        l.error({
+          key: 'initialize_workspace:update_failed',
+          error: updateError,
+          projectId,
+          sandboxId,
+          userId: session.user.id,
+        })
+        return returnServerError('Failed to update project with sandbox information')
+      }
+
+      l.info({
+        key: 'initialize_workspace:success',
+        projectId,
+        sandboxId,
+        userId: session.user.id,
+      })
+
+      return {
+        project: updatedProject,
+        sandboxId,
+        sandboxUrl,
+        message: 'Workspace initialized successfully',
+      }
+    } catch (error: unknown) {
+      l.error({
+        key: 'initialize_workspace:failed',
+        error,
+        projectId,
+        userId: session.user.id,
+      })
+
+      // Update project status to failed
+      try {
+        await supabase
+          .from('projects')
+          .update({
+            sandbox_status: 'failed',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', projectId)
+      } catch (statusUpdateError) {
+        l.error({
+          key: 'initialize_workspace:status_update_failed',
+          error: statusUpdateError,
+          projectId,
+          userId: session.user.id,
+        })
+      }
+
+      // Provide more specific error message
+      if (error instanceof Error) {
+        return returnServerError(`Failed to initialize workspace: ${error.message}`)
+      }
+
+      return returnServerError('Failed to initialize workspace: Unknown error')
     }
   })
 

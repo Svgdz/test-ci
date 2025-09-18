@@ -13,32 +13,15 @@ commands:
       - run:
           name: 'Install npm dependencies'
           command: |
-            # Ensure we're not in production mode to install devDependencies
             export HUSKY=0
-
             echo "Node version: $(node --version)"
             echo "npm version: $(npm --version)"
 
-            # Check if package-lock.json exists and is valid
             if [ -f "package-lock.json" ]; then
-              echo "package-lock.json found, verifying integrity..."
-              # Check if package-lock.json is valid JSON
-              if ! node -e "JSON.parse(require('fs').readFileSync('package-lock.json', 'utf8'))" 2>/dev/null; then
-                echo "Invalid package-lock.json detected, removing..."
-                rm package-lock.json
-              fi
-            fi
-
-            # Install dependencies (including devDependencies)
-            if [ -f "package-lock.json" ]; then
-              echo "Using npm ci for clean install (including devDependencies)..."
               npm ci --include=dev --no-audit
             else
-              echo "No valid package-lock.json found, using npm install..."
               npm install --include=dev --no-audit
             fi
-
-            # Verify installation completed
             echo "Dependencies installed successfully"
       - load_env_file
       - save_cache:
@@ -100,24 +83,21 @@ commands:
 
 # Define the jobs
 jobs:
-  # LambdaTest E2E Testing - ONLY JOB
-  e2e_lambdatest_localhost:
+  # LambdaTest E2E Testing - Windows Chrome
+  e2e_lambdatest_windows:
     docker:
       - image: cimg/node:20.19.0-browsers
     working_directory: ~/project
     environment:
-      LT_BUILD_NAME: 'AIBEXX-E2E-${CIRCLE_BUILD_NUM}'
-      LT_TEST_NAME: 'AIBEXX-Multi-Browser-E2E-Tests'
-    # Set timeout to prevent hanging
+      LT_BUILD_NAME: 'AIBEXX-E2E-Windows-${CIRCLE_BUILD_NUM}'
+      LT_TEST_NAME: 'AIBEXX-Windows-Chrome-E2E-Tests'
     resource_class: medium
     parallelism: 1
     steps:
       - checkout
-
-      # Notify GitHub that E2E tests are starting
       - notify_github_status:
           status: pending
-          context: 'ci/e2e-tests'
+          context: 'ci/e2e-windows'
 
       # Install dependencies and setup
       - install_dependencies
@@ -128,16 +108,13 @@ jobs:
       - run:
           name: 'Setup LambdaTest and build application'
           command: |
-            # Install LambdaTest CLI
             sudo npm install -g lambdatest-cypress-cli
-
-            # Build application
             npm run build
 
-            # Update LambdaTest config with environment variables
+            # Update LambdaTest config for Windows Chrome
             sed -i "s|\${LT_USERNAME}|${LT_USERNAME}|g" lambdatest-config.json
             sed -i "s|\${LT_ACCESS_KEY}|${LT_ACCESS_KEY}|g" lambdatest-config.json
-            sed -i "s|\${LT_BUILD_NAME:-AIBEXX-E2E-Local}|AIBEXX-E2E-${CIRCLE_BUILD_NUM}|g" lambdatest-config.json
+            sed -i "s|\${LT_BUILD_NAME:-AIBEXX-E2E-Local}|AIBEXX-E2E-Windows-${CIRCLE_BUILD_NUM}|g" lambdatest-config.json
             sed -i "s|\${NEXT_PUBLIC_SUPABASE_URL}|${NEXT_PUBLIC_SUPABASE_URL}|g" lambdatest-config.json
             sed -i "s|\${NEXT_PUBLIC_SUPABASE_ANON_KEY}|${NEXT_PUBLIC_SUPABASE_ANON_KEY}|g" lambdatest-config.json
             sed -i "s|\${SUPABASE_SERVICE_ROLE_KEY}|${SUPABASE_SERVICE_ROLE_KEY}|g" lambdatest-config.json
@@ -154,108 +131,84 @@ jobs:
           name: 'Wait for application to be ready'
           command: |
             echo "Waiting for application to start..."
-
-            # Check if the process is running
-            if pgrep -f "next start" > /dev/null; then
-              echo "Next.js process is running"
-            else
-              echo "ERROR: Next.js process is not running"
-              echo "Checking for any node processes:"
-              ps aux | grep node || echo "No node processes found"
-              exit 1
-            fi
-
-            # Wait for the app with better error reporting
             for i in {1..60}; do
               if curl -f http://localhost:3000 > /dev/null 2>&1; then
                 echo "Application is ready!"
                 exit 0
               else
                 echo "Attempt $i: App not ready yet..."
-                curl -s http://localhost:3000 || echo "Connection failed"
                 sleep 2
               fi
             done
-
-            echo "ERROR: Application failed to start after 2 minutes"
-            echo "Checking application logs..."
-            ps aux | grep next
-            netstat -tlnp | grep 3000 || echo "Port 3000 not in use"
+            echo "ERROR: Application failed to start"
             exit 1
 
-      # Run Cypress E2E tests on LambdaTest
+      # Run Cypress E2E tests on LambdaTest Windows Chrome
       - run:
-          name: 'Run E2E Tests on LambdaTest Cloud'
+          name: 'Run E2E Tests on LambdaTest Windows Chrome'
           no_output_timeout: 15m
           command: |
-            echo "Starting LambdaTest execution..."
-            echo "Build: AIBEXX-E2E-${CIRCLE_BUILD_NUM}"
+            echo "Starting LambdaTest Windows Chrome execution..."
+            echo "Build: AIBEXX-E2E-Windows-${CIRCLE_BUILD_NUM}"
 
-            # Run LambdaTest and capture both exit code and output
-            set +e  # Don't exit on error yet
+            set +e
             npx lambdatest-cypress run \
               --config-file="lambdatest-config.json" \
               --cy="--config-file cypress.config.ts --browser chrome" \
               2>&1 | tee "lambdatest-output.log"
 
             LAMBDATEST_EXIT_CODE=$?
-            set -e  # Re-enable exit on error
+            set -e
 
             echo "=== LAMBDATEST OUTPUT ==="
             cat lambdatest-output.log
             echo "=== END OUTPUT ==="
             echo "LambdaTest CLI exit code: $LAMBDATEST_EXIT_CODE"
 
-            # Validation 1: Check for critical errors
+            # Validation layers
             if grep -qi "could not execute cypress run command\|Some Error occured on Lambdatest Server\|tunnel.*error\|authentication.*failed" lambdatest-output.log; then
               echo "❌ CRITICAL ERROR: LambdaTest execution failed"
               exit 1
             fi
 
-            # Validation 2: Ensure tests actually ran (not just CLI success)
             if ! grep -qi "running\|spec\|test\|it(" lambdatest-output.log; then
               echo "❌ ERROR: No tests appear to have run"
               exit 1
             fi
 
-            # Validation 3: Check CLI exit code
             if [ $LAMBDATEST_EXIT_CODE -ne 0 ]; then
               echo "❌ FAILURE: LambdaTest CLI failed (exit code: $LAMBDATEST_EXIT_CODE)"
               exit 1
             fi
 
-            # Validation 4: Verify we got actual test results
             if grep -qi "passing\|failing\|✓\|✗\|passed\|failed" lambdatest-output.log; then
               echo "✅ SUCCESS: Tests executed and completed"
             else
-              echo "❌ WARNING: No clear test results found - possible incomplete execution"
+              echo "❌ WARNING: No clear test results found"
               exit 1
             fi
 
-            echo "✅ All validations passed - E2E tests completed successfully"
+            echo "✅ Windows Chrome tests completed successfully"
 
       # Store test artifacts
       - store_test_results:
           path: src/__test__/results
           when: always
-
       - store_artifacts:
           path: src/__test__/results
-          destination: e2e-test-results
+          destination: e2e-test-results-windows
           when: always
-
       - store_artifacts:
           path: lambdatest-output.log
-          destination: lambdatest-output.log
+          destination: lambdatest-output-windows.log
           when: always
 
       # Notify GitHub status
       - notify_github_status:
           status: success
-          context: 'ci/e2e-tests'
-
+          context: 'ci/e2e-windows'
       - run:
-          name: 'Notify GitHub of E2E test failure'
+          name: 'Notify GitHub of Windows E2E test failure'
           command: |
             curl -X POST \
               -H "Authorization: token $GITHUB_TOKEN" \
@@ -263,8 +216,150 @@ jobs:
               -d '{
                 "state": "failure",
                 "target_url": "https://circleci.com/gh/aibexx/core/'$CIRCLE_BUILD_NUM'",
-                "description": "E2E tests failed on LambdaTest",
-                "context": "ci/e2e-tests"
+                "description": "Windows E2E tests failed on LambdaTest",
+                "context": "ci/e2e-windows"
+              }' \
+              "https://api.github.com/repos/aibexx/core/statuses/$CIRCLE_SHA1"
+          when: on_fail
+
+  # LambdaTest E2E Testing - WebKit Safari
+  e2e_lambdatest_webkit:
+    docker:
+      - image: cimg/node:20.19.0-browsers
+    working_directory: ~/project
+    environment:
+      LT_BUILD_NAME: 'AIBEXX-E2E-WebKit-${CIRCLE_BUILD_NUM}'
+      LT_TEST_NAME: 'AIBEXX-WebKit-Safari-E2E-Tests'
+    resource_class: medium
+    parallelism: 1
+    steps:
+      - checkout
+      - notify_github_status:
+          status: pending
+          context: 'ci/e2e-webkit'
+
+      # Install dependencies and setup
+      - install_dependencies
+      - load_env_file
+      - setup_test_directories
+
+      # Install LambdaTest CLI and build app
+      - run:
+          name: 'Setup LambdaTest and build application'
+          command: |
+            sudo npm install -g lambdatest-cypress-cli
+            npm run build
+
+            # Update LambdaTest config for WebKit Safari
+            cp lambdatest-config.json lambdatest-webkit-config.json
+            sed -i 's/"browser": "Chrome"/"browser": "Safari"/g' lambdatest-webkit-config.json
+            sed -i 's/"platform": "Windows 11"/"platform": "macOS Monterey"/g' lambdatest-webkit-config.json
+            sed -i "s|\${LT_USERNAME}|${LT_USERNAME}|g" lambdatest-webkit-config.json
+            sed -i "s|\${LT_ACCESS_KEY}|${LT_ACCESS_KEY}|g" lambdatest-webkit-config.json
+            sed -i "s|\${LT_BUILD_NAME:-AIBEXX-E2E-Local}|AIBEXX-E2E-WebKit-${CIRCLE_BUILD_NUM}|g" lambdatest-webkit-config.json
+            sed -i "s|\${NEXT_PUBLIC_SUPABASE_URL}|${NEXT_PUBLIC_SUPABASE_URL}|g" lambdatest-webkit-config.json
+            sed -i "s|\${NEXT_PUBLIC_SUPABASE_ANON_KEY}|${NEXT_PUBLIC_SUPABASE_ANON_KEY}|g" lambdatest-webkit-config.json
+            sed -i "s|\${SUPABASE_SERVICE_ROLE_KEY}|${SUPABASE_SERVICE_ROLE_KEY}|g" lambdatest-webkit-config.json
+            sed -i "s|\${E2B_API_KEY}|${E2B_API_KEY}|g" lambdatest-webkit-config.json
+            sed -i "s|\${CYPRESS_TEST_EMAIL}|${CYPRESS_TEST_EMAIL:-cypress-test@example.com}|g" lambdatest-webkit-config.json
+            sed -i "s|\${CYPRESS_TEST_PASSWORD}|${CYPRESS_TEST_PASSWORD:-CypressTest123!}|g" lambdatest-webkit-config.json
+
+      - run:
+          name: 'Start application server'
+          command: npm start
+          background: true
+
+      - run:
+          name: 'Wait for application to be ready'
+          command: |
+            echo "Waiting for application to start..."
+            for i in {1..60}; do
+              if curl -f http://localhost:3000 > /dev/null 2>&1; then
+                echo "Application is ready!"
+                exit 0
+              else
+                echo "Attempt $i: App not ready yet..."
+                sleep 2
+              fi
+            done
+            echo "ERROR: Application failed to start"
+            exit 1
+
+      # Run Cypress E2E tests on LambdaTest WebKit Safari
+      - run:
+          name: 'Run E2E Tests on LambdaTest WebKit Safari'
+          no_output_timeout: 15m
+          command: |
+            echo "Starting LambdaTest WebKit Safari execution..."
+            echo "Build: AIBEXX-E2E-WebKit-${CIRCLE_BUILD_NUM}"
+
+            set +e
+            npx lambdatest-cypress run \
+              --config-file="lambdatest-webkit-config.json" \
+              --cy="--config-file cypress.config.ts --browser webkit" \
+              2>&1 | tee "lambdatest-webkit-output.log"
+
+            LAMBDATEST_EXIT_CODE=$?
+            set -e
+
+            echo "=== LAMBDATEST WEBKIT OUTPUT ==="
+            cat lambdatest-webkit-output.log
+            echo "=== END OUTPUT ==="
+            echo "LambdaTest CLI exit code: $LAMBDATEST_EXIT_CODE"
+
+            # Validation layers
+            if grep -qi "could not execute cypress run command\|Some Error occured on Lambdatest Server\|tunnel.*error\|authentication.*failed" lambdatest-webkit-output.log; then
+              echo "❌ CRITICAL ERROR: LambdaTest WebKit execution failed"
+              exit 1
+            fi
+
+            if ! grep -qi "running\|spec\|test\|it(" lambdatest-webkit-output.log; then
+              echo "❌ ERROR: No tests appear to have run"
+              exit 1
+            fi
+
+            if [ $LAMBDATEST_EXIT_CODE -ne 0 ]; then
+              echo "❌ FAILURE: LambdaTest CLI failed (exit code: $LAMBDATEST_EXIT_CODE)"
+              exit 1
+            fi
+
+            if grep -qi "passing\|failing\|✓\|✗\|passed\|failed" lambdatest-webkit-output.log; then
+              echo "✅ SUCCESS: Tests executed and completed"
+            else
+              echo "❌ WARNING: No clear test results found"
+              exit 1
+            fi
+
+            echo "✅ WebKit Safari tests completed successfully"
+
+      # Store test artifacts
+      - store_test_results:
+          path: src/__test__/results
+          when: always
+      - store_artifacts:
+          path: src/__test__/results
+          destination: e2e-test-results-webkit
+          when: always
+      - store_artifacts:
+          path: lambdatest-webkit-output.log
+          destination: lambdatest-output-webkit.log
+          when: always
+
+      # Notify GitHub status
+      - notify_github_status:
+          status: success
+          context: 'ci/e2e-webkit'
+      - run:
+          name: 'Notify GitHub of WebKit E2E test failure'
+          command: |
+            curl -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "state": "failure",
+                "target_url": "https://circleci.com/gh/aibexx/core/'$CIRCLE_BUILD_NUM'",
+                "description": "WebKit E2E tests failed on LambdaTest",
+                "context": "ci/e2e-webkit"
               }' \
               "https://api.github.com/repos/aibexx/core/statuses/$CIRCLE_SHA1"
           when: on_fail
@@ -273,7 +368,8 @@ jobs:
 workflows:
   version: 2
 
-  # Simplified workflow - only LambdaTest E2E testing
-  e2e_only:
+  # E2E Testing Only - Two Browser Matrix
+  e2e_cross_browser:
     jobs:
-      - e2e_lambdatest_localhost
+      - e2e_lambdatest_windows
+      - e2e_lambdatest_webkit

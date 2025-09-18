@@ -4,8 +4,7 @@
 // Authentication flow E2E tests
 describe('Authentication Flow', () => {
   beforeEach(() => {
-    cy.visit('/')
-    cy.get('body').should('be.visible')
+    cy.waitForApp()
   })
 
   it('should display sign-in form', () => {

@@ -3,14 +3,13 @@ import { SandboxProvider, SandboxInfo, CommandResult } from '../types'
 // SandboxProviderConfig available through parent class
 import { appConfig } from '@/configs'
 
-// Type definitions for E2B sandbox operations
 interface E2BSandbox {
   sandboxId: string
   setTimeout?: (timeout: number) => Promise<void> | void
   getHostname?: (port: number) => string
   getHost?: (port: number) => string
-  betaPause?: () => Promise<boolean>
-  connect?: () => Promise<E2BSandbox>
+  betaPause: () => Promise<boolean> // E2B pause functionality (beta) - returns boolean
+  connect: () => Promise<E2BSandbox> // Resume paused sandbox
   runCode: (code: string) => Promise<{
     logs: {
       stdout: string[]
@@ -101,101 +100,42 @@ export class E2BProvider extends SandboxProvider {
     }
   }
 
-  /**
-   * Pause the sandbox to preserve state while stopping compute
-   */
-  async pauseSandbox(): Promise<void> {
-    if (!this.sandbox) {
-      throw new Error('No active sandbox to pause')
-    }
-
-    try {
-      console.log(`[E2BProvider] Pausing sandbox ${this.sandbox.sandboxId}`)
-      if (this.sandbox.betaPause) {
-        await this.sandbox.betaPause()
-      }
-
-      // Sandbox paused successfully
-
-      console.log(`[E2BProvider] Sandbox ${this.sandbox.sandboxId} paused successfully`)
-    } catch (error: unknown) {
-      console.error(`[E2BProvider] Failed to pause sandbox:`, error)
-      throw error
-    }
-  }
-
-  /**
-   * Resume a paused sandbox
-   */
-  async resumeSandbox(): Promise<void> {
-    if (!this.sandbox) {
-      throw new Error('No sandbox instance to resume')
-    }
-
-    try {
-      console.log(`[E2BProvider] Resuming sandbox ${this.sandbox.sandboxId}`)
-
-      // Connect will automatically resume if paused
-      if (this.sandbox.connect) {
-        this.sandbox = await this.sandbox.connect()
-      }
-
-      // Sandbox resumed successfully
-
-      console.log(`[E2BProvider] Sandbox ${this.sandbox.sandboxId} resumed successfully`)
-    } catch (error: unknown) {
-      console.error(`[E2BProvider] Failed to resume sandbox:`, error)
-      throw error
-    }
-  }
-
-  /**
-   * List all paused sandboxes
-   */
-  static async listPausedSandboxes(): Promise<unknown[]> {
-    try {
-      const paginator = Sandbox.list({ query: { state: ['paused'] } })
-      const sandboxes = []
-
-      // Get all paused sandboxes
-      while (paginator.hasNext) {
-        const items = await paginator.nextItems()
-        sandboxes.push(...items)
-      }
-
-      return sandboxes
-    } catch (error: unknown) {
-      console.error('[E2BProvider] Failed to list paused sandboxes:', error)
-      return []
-    }
-  }
-
   async createSandbox(): Promise<SandboxInfo> {
     try {
-      // Kill existing sandbox if any
+      // IMPORTANT: Do NOT kill existing sandboxes - this defeats the pause/resume flow
+      // This method should only be called for brand new sandboxes
       if (this.sandbox) {
-        try {
-          await this.sandbox.kill()
-        } catch (e: unknown) {
-          console.error('Failed to kill existing sandbox:', e)
+        console.warn(
+          '[E2BProvider] createSandbox called but sandbox already exists. Returning existing sandbox info.'
+        )
+
+        // Construct the preview URL
+        let url = `https://${this.sandbox.sandboxId}-${appConfig.e2b.vitePort}.e2b.dev`
+        if (this.sandbox.getHostname) {
+          url = this.sandbox.getHostname(appConfig.e2b.vitePort)
         }
-        this.sandbox = null
+
+        return {
+          sandboxId: this.sandbox.sandboxId,
+          url,
+          provider: 'e2b' as const,
+          createdAt: new Date(),
+        }
       }
 
-      // Clear existing files tracking
+      // Clear existing files tracking for new sandbox
       this.existingFiles.clear()
 
-      // Create Code Interpreter sandbox with extended timeout
-      this.sandbox = (await Sandbox.create({
+      // Create Code Interpreter sandbox with auto-pause enabled (beta)
+      // This ensures sandboxes automatically pause instead of being killed when they timeout
+      this.sandbox = (await Sandbox.betaCreate({
         apiKey: this.config.e2b?.apiKey || process.env.E2B_API_KEY,
-        timeoutMs: this.config.e2b?.timeoutMs || 30 * 60 * 1000, // 30 minutes for file operations
+        autoPause: true, // Enable auto-pause to preserve state when timeout occurs
+        timeoutMs: this.config.e2b?.timeoutMs,
       })) as E2BSandbox
 
       const sandboxId = this.sandbox.sandboxId
 
-      // For E2B v2, always construct URL with correct port format
-      // The E2B SDK methods often return base URLs without port prefixes
-      // So we'll construct the correct format manually
       let sdkUrl: string | null = null
 
       try {

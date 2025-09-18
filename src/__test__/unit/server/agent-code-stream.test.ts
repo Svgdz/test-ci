@@ -35,8 +35,27 @@ vi.mock('@/server/sandbox/manager', () => ({
   sandboxManager: {
     getProvider: vi.fn(() => null),
     getActiveProvider: vi.fn(() => null),
+    getOrReconnectProvider: vi.fn(() =>
+      Promise.resolve({
+        createSandbox: vi.fn(() => Promise.resolve({ sandboxId: 'test-sandbox-123' })),
+        setupViteApp: vi.fn(() => Promise.resolve()),
+        listFiles: vi.fn(() => Promise.resolve(['src/App.tsx', 'package.json'])),
+        readFile: vi.fn(() => Promise.resolve('mock file content')),
+        writeFile: vi.fn(() => Promise.resolve()),
+        runCommand: vi.fn(() =>
+          Promise.resolve({
+            exitCode: 0,
+            stdout: 'Command executed successfully',
+            stderr: '',
+          })
+        ),
+        isAlive: vi.fn(() => true),
+        terminate: vi.fn(() => Promise.resolve()),
+      })
+    ),
     registerSandbox: vi.fn(),
     setActiveSandbox: vi.fn(),
+    initializeDatabaseSync: vi.fn(),
   },
 }))
 
@@ -254,10 +273,10 @@ describe('Agent Code Stream Unit Tests', () => {
         context: { ...mockInput.context, sandboxId: '' },
       }
 
-      const result = await applyAiCodeStream(invalidSandboxInput, mockOnProgress)
-
-      expect(result).toBeDefined()
-      // Should attempt to create new sandbox or handle gracefully
+      // Should throw an error when no sandbox ID is provided
+      await expect(applyAiCodeStream(invalidSandboxInput, mockOnProgress)).rejects.toThrow(
+        'No sandboxId provided for AI generation'
+      )
     })
   })
 

@@ -5,13 +5,8 @@
   },
   "browsers": [
     {
-      "browser": "Chrome",
-      "platform": "Windows 11",
-      "versions": ["latest"]
-    },
-    {
-      "browser": "MicrosoftEdge",
-      "platform": "Windows 11",
+      "browser": "Webkit",
+      "platform": "macOS Ventura",
       "versions": ["latest"]
     }
   ],

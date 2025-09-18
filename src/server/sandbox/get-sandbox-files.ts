@@ -67,20 +67,46 @@ export const getSandboxFiles = authActionClient
       if (sandboxId) {
         provider = sandboxManager.getProvider(sandboxId)
         if (!provider) {
+          l.info({ key: 'sandbox:get_files:reconnecting', sandboxId, userId: session.user.id })
+
           const { SandboxFactory } = await import('@/server/sandbox/factory')
           provider = SandboxFactory.create()
           try {
-            const reconnected = await (
+            // Add timeout to prevent long waits
+            const reconnectPromise = (
               provider as { reconnect?: (id: string) => Promise<boolean> }
             ).reconnect?.(sandboxId)
+
+            if (!reconnectPromise) {
+              throw new Error('Provider does not support reconnection')
+            }
+
+            // Race against timeout to prevent hanging
+            const timeoutPromise = new Promise<boolean>((_, reject) => {
+              setTimeout(() => reject(new Error('Reconnection timeout')), 10000) // 10 second timeout
+            })
+
+            const reconnected = await Promise.race([reconnectPromise, timeoutPromise])
+
             if (reconnected) {
               sandboxManager.registerSandbox(sandboxId, provider)
               sandboxManager.setActiveSandbox(sandboxId)
+              l.info({ key: 'sandbox:get_files:reconnected', sandboxId, userId: session.user.id })
             } else {
               provider = null
+              l.warn({
+                key: 'sandbox:get_files:reconnect_failed',
+                sandboxId,
+                userId: session.user.id,
+              })
             }
           } catch (error) {
-            console.warn(`Could not reconnect to sandbox ${sandboxId}:`, error)
+            l.warn({
+              key: 'sandbox:get_files:reconnect_error',
+              error: error instanceof Error ? error.message : 'Unknown error',
+              sandboxId,
+              userId: session.user.id,
+            })
             provider = null
           }
         }

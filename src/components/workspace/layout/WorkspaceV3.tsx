@@ -74,11 +74,22 @@ interface ChatMessage {
   }
 }
 
+interface InitializationState {
+  status: 'initializing' | 'success' | 'error' | 'ready'
+  message: string
+  sandboxId?: string
+  sandboxUrl?: string
+  error?: string
+  justInitialized?: boolean
+}
+
 interface WorkspaceV3Props {
   sandboxKey: string
   sandboxId?: string | null
   className?: string
   initialPrompt?: string
+  initializationState?: InitializationState
+  projectName?: string
 }
 
 interface ProgressState {
@@ -237,7 +248,14 @@ function CustomFileTree({ files, selectedFile, onFileSelect, unsavedFiles }: Cus
   return <div className='text-sm'>{fileTree.map((node) => renderNode(node))}</div>
 }
 
-export function WorkspaceV3({ sandboxKey, sandboxId, className, initialPrompt }: WorkspaceV3Props) {
+export function WorkspaceV3({
+  sandboxKey,
+  sandboxId,
+  className,
+  initialPrompt,
+  initializationState = { status: 'ready', message: '' },
+  projectName,
+}: WorkspaceV3Props) {
   const [sandboxData, setSandboxData] = useState<SandboxData | null>(null)
   const [status, setStatus] = useState({ text: 'Not connected', active: false })
   const [structureContent, setStructureContent] = useState('No sandbox created yet')
@@ -782,8 +800,18 @@ export function WorkspaceV3({ sandboxKey, sandboxId, className, initialPrompt }:
         setIsGeneratingCode(true)
         setProgressState({ step: 1, totalSteps: 5, message: 'Starting AI generation...' })
 
+        // Ensure we have a valid sandboxId before proceeding
+        if (!sandboxData?.sandboxId || sandboxData.sandboxId === 'initializing') {
+          console.error('[handleChatSend] No valid sandboxId available:', { sandboxData })
+          return {
+            content: 'Error: Sandbox not ready. Please wait for initialization to complete.',
+            type: 'error',
+            timestamp: new Date(),
+          }
+        }
+
         const fullContext = {
-          sandboxId: sandboxData?.sandboxId,
+          sandboxId: sandboxData.sandboxId,
           structure: structureContent,
           recentMessages: chatMessages.slice(-20),
           currentCode: '',
@@ -1153,6 +1181,11 @@ export function WorkspaceV3({ sandboxKey, sandboxId, className, initialPrompt }:
   const handleSendMessage = () => {
     if (!aiChatInput.trim()) return
 
+    // Prevent submission during initialization
+    if (initializationState?.status === 'initializing') {
+      return
+    }
+
     // Prepare the actual prompt to send to AI
     let actualPrompt = aiChatInput
 
@@ -1218,17 +1251,129 @@ Please make the requested changes to this specific element.`
     }
   }
 
-  // Initialize sandbox if sandboxId is provided
+  // Handle initial prompt when provided (show in chat but don't submit yet)
   useEffect(() => {
-    if (sandboxId && !sandboxData) {
-      loadSandboxInfo(sandboxId)
+    if (initialPrompt && initialPrompt.trim() && chatMessages.length === 0) {
+      // Add initial prompt to chat but don't send to AI yet
+      const initialMessage: ChatMessage = {
+        content: initialPrompt.trim(),
+        type: 'user',
+        timestamp: new Date(),
+      }
+
+      setChatMessages([initialMessage])
+      setAiChatInput(initialPrompt.trim())
+    }
+  }, [initialPrompt, chatMessages.length])
+
+  // Handle auto-actions when sandbox becomes ready and connected
+  useEffect(() => {
+    if (
+      initializationState?.status === 'ready' &&
+      initializationState.justInitialized &&
+      sandboxData &&
+      sandboxData.sandboxId &&
+      sandboxData.sandboxId !== 'initializing' &&
+      sandboxData.sandboxId === initializationState.sandboxId
+    ) {
+      console.log('[WorkspaceV3] Sandbox just initialized and connected, triggering auto-actions')
+      console.log('[WorkspaceV3] SandboxData:', sandboxData)
+      console.log('[WorkspaceV3] InitializationState:', initializationState)
+
+      // Auto-refresh preview if on preview tab
+      if (view === 'preview') {
+        setTimeout(() => {
+          const iframe = document.querySelector('iframe[title="Preview"]') as HTMLIFrameElement
+          if (iframe && sandboxData?.url) {
+            console.log('[WorkspaceV3] Auto-refreshing preview iframe')
+            iframe.src = `${sandboxData.url}?t=${Date.now()}&auto=true`
+          }
+        }, 1000) // Shorter delay since sandbox is already connected
+      }
+
+      // Auto-submit initial prompt if present - ONLY when we have valid sandboxData
+      if (initialPrompt && initialPrompt.trim() && aiChatInput.trim() && sandboxData.sandboxId) {
+        console.log(
+          '[WorkspaceV3] Auto-submitting initial prompt with sandboxId:',
+          sandboxData.sandboxId
+        )
+
+        // Small delay to ensure everything is ready
+        setTimeout(() => {
+          void handleChatSend(initialPrompt.trim()).then((response) => {
+            setChatMessages((prev) => [...prev, response])
+            setAiChatInput('') // Clear input after auto-submit
+          })
+        }, 2000) // Longer delay to ensure sandbox is fully ready
+      }
+    }
+  }, [
+    initializationState?.status,
+    initializationState?.justInitialized,
+    initializationState?.sandboxId,
+    sandboxData,
+    initialPrompt,
+    aiChatInput,
+    view,
+  ])
+
+  // Immediate refresh when sandbox data becomes available (regardless of initialization state)
+  useEffect(() => {
+    if (sandboxData && sandboxData.sandboxId && sandboxData.sandboxId !== 'initializing') {
+      console.log('[WorkspaceV3] Sandbox data available, triggering immediate refresh')
+
+      // Refresh preview immediately when sandbox becomes available
+      if (view === 'preview') {
+        setTimeout(() => {
+          const iframe = document.querySelector('iframe[title="Preview"]') as HTMLIFrameElement
+          if (iframe && sandboxData?.url) {
+            console.log('[WorkspaceV3] Immediate preview refresh on sandbox data availability')
+            iframe.src = `${sandboxData.url}?t=${Date.now()}&immediate=true`
+          }
+        }, 200) // Very fast refresh
+      }
+    }
+  }, [sandboxData?.sandboxId, sandboxData?.url, view])
+
+  // Initialize sandbox if sandboxId is provided and not in initialization
+  useEffect(() => {
+    console.log('[WorkspaceV3] Sandbox effect triggered:', {
+      sandboxId,
+      hasSandboxData: !!sandboxData,
+    })
+
+    if (sandboxId && sandboxId !== 'initializing' && !sandboxData) {
+      console.log('[WorkspaceV3] Loading sandbox info for:', sandboxId)
+
+      // Add timeout for sandbox loading to prevent hanging
+      const loadWithTimeout = Promise.race([
+        loadSandboxInfo(sandboxId),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Sandbox loading timeout')), 20000) // 20 second timeout
+        }),
+      ])
+
+      loadWithTimeout
         .then(() => {
+          console.log('[WorkspaceV3] Sandbox info loaded, loading files...')
           // Load initial files immediately after sandbox connection
           void loadSandboxFiles()
-          // Load chat history
-          void loadChatHistory()
+          // Load chat history (but preserve initial prompt if present)
+          if (!initialPrompt) {
+            void loadChatHistory()
+          }
         })
         .catch((error) => {
+          console.error('[WorkspaceV3] Failed to load sandbox:', error)
+
+          // Show user-friendly error message
+          if (error instanceof Error && error.message.includes('timeout')) {
+            console.warn(
+              '[WorkspaceV3] Sandbox loading timed out, sandbox may be paused or unavailable'
+            )
+            // Could show a toast or notification here
+          }
+
           l.error({
             key: 'workspace_v3:init_error',
             error: error instanceof Error ? error.message : 'Unknown error',
@@ -1236,7 +1381,54 @@ Please make the requested changes to this specific element.`
           })
         })
     }
-  }, [sandboxId, sandboxData])
+  }, [sandboxId, sandboxData, initialPrompt])
+
+  // Update sandbox when initialization state provides new sandbox ID
+  useEffect(() => {
+    if (
+      initializationState?.sandboxId &&
+      initializationState.sandboxId !== sandboxId &&
+      initializationState.sandboxId !== 'initializing' &&
+      initializationState.status === 'ready'
+    ) {
+      console.log(
+        '[WorkspaceV3] Initialization provided new sandbox ID:',
+        initializationState.sandboxId
+      )
+      console.log('[WorkspaceV3] Current sandboxData:', sandboxData)
+
+      // Force reload sandbox info with the new ID
+      loadSandboxInfo(initializationState.sandboxId)
+        .then(() => {
+          console.log('[WorkspaceV3] Successfully connected to initialized sandbox')
+          // Force reload files after sandbox connection
+          return loadSandboxFiles()
+        })
+        .then(() => {
+          console.log('[WorkspaceV3] Files loaded after sandbox initialization')
+          // Immediately refresh preview if on preview tab
+          if (view === 'preview') {
+            setTimeout(() => {
+              const iframe = document.querySelector('iframe[title="Preview"]') as HTMLIFrameElement
+              if (iframe && initializationState.sandboxUrl) {
+                console.log('[WorkspaceV3] Immediately refreshing preview after files loaded')
+                iframe.src = `${initializationState.sandboxUrl}?t=${Date.now()}&immediate=true`
+              }
+            }, 500) // Very short delay
+          }
+        })
+        .catch((error) => {
+          console.error('[WorkspaceV3] Failed to connect to initialized sandbox:', error)
+        })
+    }
+  }, [
+    initializationState?.sandboxId,
+    initializationState?.status,
+    initializationState?.sandboxUrl,
+    sandboxId,
+    sandboxData,
+    view,
+  ])
 
   // Auto-scroll chat messages
   useEffect(() => {
@@ -1510,10 +1702,23 @@ Please make the requested changes to this specific element.`
               />
               <button
                 onClick={handleSendMessage}
-                disabled={!aiChatInput.trim() || isGeneratingCode}
+                disabled={
+                  !aiChatInput.trim() ||
+                  isGeneratingCode ||
+                  initializationState?.status === 'initializing'
+                }
                 className='px-4 py-2 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white text-sm rounded transition-colors'
               >
-                {isEditingWithAI ? 'Edit' : 'Send'}
+                {initializationState?.status === 'initializing' ? (
+                  <div className='flex items-center space-x-2'>
+                    <div className='w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin'></div>
+                    <span>Loading...</span>
+                  </div>
+                ) : isEditingWithAI ? (
+                  'Edit'
+                ) : (
+                  'Send'
+                )}
               </button>
             </div>
           </div>
@@ -1730,7 +1935,19 @@ Please make the requested changes to this specific element.`
                         />
                       ) : (
                         <div className='h-full flex items-center justify-center text-sm text-gray-500 dark:text-gray-400'>
-                          {selectedFile ? (
+                          {initializationState?.status === 'initializing' ? (
+                            <div className='text-center'>
+                              <div className='flex justify-center mb-4'>
+                                <div className='w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin'></div>
+                              </div>
+                              <p className='text-gray-600 dark:text-gray-400 mb-2'>
+                                Loading sandbox files...
+                              </p>
+                              <p className='text-xs text-gray-500 dark:text-gray-500'>
+                                {initializationState.message}
+                              </p>
+                            </div>
+                          ) : selectedFile ? (
                             <div className='text-center'>
                               <p>Loading file: {selectedFile}</p>
                               <p className='text-xs mt-2'>
@@ -1751,7 +1968,67 @@ Please make the requested changes to this specific element.`
               </div>
             ) : view === 'preview' ? (
               <div className='h-full bg-white dark:bg-gray-950'>
-                {sandboxData?.url ? (
+                {initializationState?.status === 'initializing' ? (
+                  <div className='h-full flex items-center justify-center'>
+                    <div className='text-center'>
+                      <div className='flex justify-center mb-4'>
+                        <div className='w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin'></div>
+                      </div>
+                      <h3 className='text-lg font-medium text-gray-900 dark:text-gray-100 mb-2'>
+                        {projectName || 'Setting up workspace'}
+                      </h3>
+                      <p className='text-gray-600 dark:text-gray-400 mb-4'>
+                        {initializationState.message}
+                      </p>
+                      <div className='space-y-2 text-sm text-gray-500 dark:text-gray-400'>
+                        <div className='flex items-center justify-center space-x-2'>
+                          <div className='w-2 h-2 bg-blue-600 rounded-full animate-pulse'></div>
+                          <span>Creating sandbox environment</span>
+                        </div>
+                        <div className='flex items-center justify-center space-x-2'>
+                          <div className='w-2 h-2 bg-gray-300 rounded-full'></div>
+                          <span>Setting up development tools</span>
+                        </div>
+                        <div className='flex items-center justify-center space-x-2'>
+                          <div className='w-2 h-2 bg-gray-300 rounded-full'></div>
+                          <span>Preparing workspace</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : initializationState?.status === 'error' ? (
+                  <div className='h-full flex items-center justify-center'>
+                    <div className='text-center'>
+                      <div className='text-red-600 mb-4'>
+                        <svg
+                          className='w-12 h-12 mx-auto'
+                          fill='none'
+                          stroke='currentColor'
+                          viewBox='0 0 24 24'
+                        >
+                          <path
+                            strokeLinecap='round'
+                            strokeLinejoin='round'
+                            strokeWidth={2}
+                            d='M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 18.5c-.77.833.192 2.5 1.732 2.5z'
+                          />
+                        </svg>
+                      </div>
+                      <h3 className='text-lg font-medium text-gray-900 dark:text-gray-100 mb-2'>
+                        Setup Failed
+                      </h3>
+                      <p className='text-gray-600 dark:text-gray-400 mb-4'>
+                        {initializationState.error || 'Failed to initialize workspace'}
+                      </p>
+                      <button
+                        onClick={() => window.location.reload()}
+                        className='px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors'
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  </div>
+                ) : sandboxData?.url ? (
                   <div className='relative h-full'>
                     {/* Debug info for preview URL */}
                     <div className='p-2 bg-gray-100 dark:bg-gray-800 text-xs text-gray-600 dark:text-gray-300 border-b'>
