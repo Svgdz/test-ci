@@ -4,18 +4,19 @@
 
 import { defineConfig } from 'cypress'
 
-module.exports = defineConfig({
+export default defineConfig({
+  experimentalWebKitSupport: true,
   e2e: {
+    supportFile: 'src/__test__/support/e2e.ts',
+    specPattern: 'src/__test__/e2e/**/*.cy.{js,jsx,ts,tsx}',
     setupNodeEvents(on, config) {
       return config
     },
-    // Enable mochawesome reporter
-    reporter: 'mochawesome',
-    reporterOptions: {
-      reportDir: 'cypress/results/mochawesome',
-      overwrite: true,
-      html: true,
-      json: true,
-    },
+  },
+
+  modifyObstructiveCode: false,
+  retries: {
+    runMode: 2,
+    openMode: 0,
   },
 })
