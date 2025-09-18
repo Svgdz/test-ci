@@ -81,7 +81,7 @@ commands:
           name: Generate .env for build/runtime
           command: |
             echo "Generating .env from CircleCI variables..."
-            cat > .env << EOF
+            cat > .env \<< EOF
             NEXT_LOG_LEVEL=${NEXT_LOG_LEVEL:-info}
             SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
             NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-}
@@ -275,7 +275,7 @@ jobs:
 
             # Create a simple reporter config if it doesn't exist
             if [ ! -f "reporter_config.json" ]; then
-              cat > reporter_config.json << 'EOF'
+              cat > reporter_config.json \<< 'EOF'
             {
               "reporterEnabled": "mochawesome",
               "mochawesomeReporterOptions": {
@@ -321,7 +321,7 @@ jobs:
               ls -la src/__test__/e2e/ || echo "Directory does not exist"
               echo "Creating a sample test for verification..."
               mkdir -p src/__test__/e2e
-              cat > src/__test__/e2e/sample.cy.ts << 'EOF'
+              cat > src/__test__/e2e/sample.cy.ts \<< 'EOF'
             describe('Sample E2E Test', () => {
               it('should load the application', () => {
                 cy.visit('/')
