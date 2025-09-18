@@ -8,6 +8,11 @@
       "browser": "Chrome",
       "platform": "Windows 11",
       "versions": ["latest"]
+    },
+    {
+      "browser": "MicrosoftEdge",
+      "platform": "Windows 11",
+      "versions": ["latest"]
     }
   ],
   "run_settings": {
