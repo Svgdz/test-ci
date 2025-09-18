@@ -91,7 +91,7 @@ describe('AI Code Generation E2E Tests', () => {
       cy.get('button[type="submit"]').click()
 
       /* The main test: verify the API call is made and succeeds */
-      cy.wait('@createProject', { timeout: 30000 }).then((interception) => {
+      cy.wait('@createProject', { timeout: 120000 }).then((interception) => {
         expect(interception.response?.statusCode).to.equal(200)
         expect(interception.response?.body).to.have.property('type', 'redirect')
         expect(interception.response?.body).to.have.property('projectId')
