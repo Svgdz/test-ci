@@ -11,22 +11,41 @@
     }
   ],
   "run_settings": {
+    "reporter_config_file": "base_reporter_config.json",
     "build_name": "${LT_BUILD_NAME:-AIBEXX-E2E-Local}",
     "project_name": "AIBEXX Core Application",
-    "specs": "src/__test__/e2e/**/*.cy.ts",
+    "build_tags": "e2e,cypress,core",
+    "other_files": [
+      "src/__test__/support/**/*",
+      "cypress.config.ts",
+      "tsconfig.json",
+      "package.json"
+    ],
     "parallels": 1,
+    "specs": "src/__test__/e2e/**/*.cy.ts",
+    "ignore_files": "",
+    "network": true,
     "headless": true,
+    "build_timeout": 600,
+    "debug": true,
     "baseUrl": "http://localhost:3000",
+    "browser": "chrome",
     "npm_dependencies": {
       "cypress": "13.15.2",
-      "typescript": "^5.0.0"
+      "cypress-wait-until": "3.0.2",
+      "playwright-webkit": "^1.55.0",
+      "typescript": "^5.0.0",
+      "ts-node": "^10.9.0",
+      "@types/node": "^20.0.0"
     },
+    "feature_file_support": false,
     "env": {
       "NEXT_PUBLIC_SUPABASE_URL": "${NEXT_PUBLIC_SUPABASE_URL}",
       "NEXT_PUBLIC_SUPABASE_ANON_KEY": "${NEXT_PUBLIC_SUPABASE_ANON_KEY}",
       "SUPABASE_SERVICE_ROLE_KEY": "${SUPABASE_SERVICE_ROLE_KEY}",
       "E2B_API_KEY": "${E2B_API_KEY}",
       "NODE_ENV": "test",
+      "CYPRESS_BASE_URL": "http://localhost:3000",
       "CYPRESS_TEST_EMAIL": "${CYPRESS_TEST_EMAIL}",
       "CYPRESS_TEST_PASSWORD": "${CYPRESS_TEST_PASSWORD}"
     }

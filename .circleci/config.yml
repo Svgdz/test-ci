@@ -1,9 +1,5 @@
 version: 2.1
 
-# Use the LambdaTest orb for simplified tunnel management
-orbs:
-  lambda-tunnel: lambdatest/lambda-tunnel@1.0.0
-
 # Define reusable commands
 commands:
   install_dependencies:
@@ -11,25 +7,42 @@ commands:
     steps:
       - restore_cache:
           keys:
-            - v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}
+            - v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "lambdatest-config.json" }}
+            - v5-e2e-{{ checksum "package-lock.json" }}
             - v5-e2e-
       - run:
           name: 'Install npm dependencies'
           command: |
+            # Ensure we're not in production mode to install devDependencies
             export HUSKY=0
+
             echo "Node version: $(node --version)"
             echo "npm version: $(npm --version)"
 
+            # Check if package-lock.json exists and is valid
             if [ -f "package-lock.json" ]; then
+              echo "package-lock.json found, verifying integrity..."
+              # Check if package-lock.json is valid JSON
+              if ! node -e "JSON.parse(require('fs').readFileSync('package-lock.json', 'utf8'))" 2>/dev/null; then
+                echo "Invalid package-lock.json detected, removing..."
+                rm package-lock.json
+              fi
+            fi
+
+            # Install dependencies (including devDependencies)
+            if [ -f "package-lock.json" ]; then
+              echo "Using npm ci for clean install (including devDependencies)..."
               npm ci --include=dev --no-audit
             else
+              echo "No valid package-lock.json found, using npm install..."
               npm install --include=dev --no-audit
             fi
 
-            # Install LambdaTest CLI
-            sudo npm install -g lambdatest-cypress-cli
+            # Verify installation completed
+            echo "Dependencies installed successfully"
+      - load_env_file
       - save_cache:
-          key: v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}
+          key: v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "lambdatest-config.json" }}
           paths:
             - ~/.npm
             - node_modules
@@ -40,51 +53,88 @@ commands:
       - run:
           name: Generate .env for build/runtime
           command: |
+            echo "Generating .env from CircleCI variables..."
             cat > .env \<< EOF
             NEXT_LOG_LEVEL=${NEXT_LOG_LEVEL:-info}
             SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
             NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-}
             NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
-            DATABASE_URL=${DATABASE_URL:-}
-            NODE_ENV=production
             E2B_API_KEY=${E2B_API_KEY:-}
-            CYPRESS_BASE_URL=http://localhost:3000
-            CYPRESS_TEST_EMAIL=${CYPRESS_TEST_EMAIL:-cypress-test@example.com}
-            CYPRESS_TEST_PASSWORD=${CYPRESS_TEST_PASSWORD:-CypressTest123!}
+            NODE_ENV=production
             EOF
+            echo ".env generated"
+
+  setup_test_directories:
+    description: 'Create test results directories'
+    steps:
+      - run:
+          name: Create test directories
+          command: |
+            mkdir -p src/__test__/results
+            mkdir -p src/__test__/screenshots
+            mkdir -p src/__test__/videos
+
+  notify_github_status:
+    description: 'Update GitHub status check'
+    parameters:
+      status:
+        type: enum
+        enum: ['pending', 'success', 'failure']
+      context:
+        type: string
+    steps:
+      - run:
+          name: Update GitHub status
+          command: |
+            curl -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "state": "<< parameters.status >>",
+                "target_url": "https://circleci.com/gh/aibexx/core/'$CIRCLE_BUILD_NUM'",
+                "description": "CircleCI build << parameters.status >>",
+                "context": "<< parameters.context >>"
+              }' \
+              "https://api.github.com/repos/aibexx/core/statuses/$CIRCLE_SHA1"
+          when: always
 
 # Define the jobs
 jobs:
-  e2e_lambdatest:
+  # LambdaTest E2E Testing - ONLY JOB
+  e2e_lambdatest_localhost:
     docker:
       - image: cimg/node:20.19.0-browsers
     working_directory: ~/project
     environment:
       LT_BUILD_NAME: 'AIBEXX-E2E-${CIRCLE_BUILD_NUM}'
+      LT_TEST_NAME: 'AIBEXX-Multi-Browser-E2E-Tests'
+    # Set timeout to prevent hanging
+    resource_class: medium
+    parallelism: 1
     steps:
       - checkout
+
+      # Notify GitHub that E2E tests are starting
+      - notify_github_status:
+          status: pending
+          context: 'ci/e2e-tests'
+
+      # Install dependencies and setup
       - install_dependencies
       - load_env_file
+      - setup_test_directories
 
-      # Build and start the application
+      # Install LambdaTest CLI and build app
       - run:
-          name: 'Build application'
-          command: npm run build
-      - run:
-          name: 'Start application server'
-          command: npm start
-          background: true
-      - run:
-          name: 'Wait for application to be ready'
+          name: 'Setup LambdaTest and build application'
           command: |
-            timeout 120 bash -c 'until curl --output /dev/null --silent --head --fail http://localhost:3000; do sleep 2; done'
-            echo "Application is ready!"
+            # Install LambdaTest CLI
+            sudo npm install -g lambdatest-cypress-cli
 
-      # Setup LambdaTest configuration
-      - run:
-          name: 'Setup LambdaTest configuration'
-          command: |
-            # Update lambdatest-config.json with actual credentials
+            # Build application
+            npm run build
+
+            # Update LambdaTest config with environment variables
             sed -i "s|\${LT_USERNAME}|${LT_USERNAME}|g" lambdatest-config.json
             sed -i "s|\${LT_ACCESS_KEY}|${LT_ACCESS_KEY}|g" lambdatest-config.json
             sed -i "s|\${LT_BUILD_NAME:-AIBEXX-E2E-Local}|AIBEXX-E2E-${CIRCLE_BUILD_NUM}|g" lambdatest-config.json
@@ -95,35 +145,89 @@ jobs:
             sed -i "s|\${CYPRESS_TEST_EMAIL}|${CYPRESS_TEST_EMAIL:-cypress-test@example.com}|g" lambdatest-config.json
             sed -i "s|\${CYPRESS_TEST_PASSWORD}|${CYPRESS_TEST_PASSWORD:-CypressTest123!}|g" lambdatest-config.json
 
-      # Use LambdaTest orb to manage tunnel and run tests
-      - lambda-tunnel/with_tunnel:
-          tunnel_name: 'aibexx-e2e-tunnel'
-          after_tunnel:
-            - run:
-                name: 'Run E2E Tests on LambdaTest'
-                command: |
-                  echo "Running E2E tests with LambdaTest tunnel..."
-                  npx lambdatest-cypress run --config-file="lambdatest-config.json" --cy="--config-file cypress.config.ts --browser chrome"
+      - run:
+          name: 'Start application server'
+          command: npm start
+          background: true
 
-      # Store test results
+      - run:
+          name: 'Wait for application to be ready'
+          command: |
+            echo "Waiting for application to start..."
+            timeout 120 bash -c 'until curl -f http://localhost:3000 > /dev/null 2>&1; do sleep 2; done'
+            echo "Application is ready!"
+
+      # Run Cypress E2E tests on LambdaTest
+      - run:
+          name: 'Run E2E Tests on LambdaTest Cloud'
+          no_output_timeout: 15m
+          command: |
+            echo "Starting LambdaTest execution..."
+            echo "Build: AIBEXX-E2E-${CIRCLE_BUILD_NUM}"
+
+            npx lambdatest-cypress run \
+              --config-file="lambdatest-config.json" \
+              --cy="--config-file cypress.config.ts --browser chrome" \
+              2>&1 | tee "lambdatest-output.log"
+
+            LAMBDATEST_EXIT_CODE=$?
+
+            # Show output and check for errors
+            echo "=== LAMBDATEST OUTPUT ==="
+            cat lambdatest-output.log
+
+            if grep -qi "could not execute cypress run command\|Some Error occured on Lambdatest Server" lambdatest-output.log; then
+              echo "ERROR: LambdaTest execution failed"
+              exit 1
+            fi
+
+            if [ $LAMBDATEST_EXIT_CODE -eq 0 ]; then
+              echo "SUCCESS: E2E tests passed"
+            else
+              echo "FAILURE: E2E tests failed (exit code: $LAMBDATEST_EXIT_CODE)"
+              exit 1
+            fi
+
+      # Store test artifacts
       - store_test_results:
           path: src/__test__/results
+          when: always
+
       - store_artifacts:
           path: src/__test__/results
           destination: e2e-test-results
           when: always
+
       - store_artifacts:
-          path: src/__test__/screenshots
-          destination: e2e-screenshots
+          path: lambdatest-output.log
+          destination: lambdatest-output.log
           when: always
-      - store_artifacts:
-          path: src/__test__/videos
-          destination: e2e-videos
-          when: always
+
+      # Notify GitHub status
+      - notify_github_status:
+          status: success
+          context: 'ci/e2e-tests'
+
+      - run:
+          name: 'Notify GitHub of E2E test failure'
+          command: |
+            curl -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "state": "failure",
+                "target_url": "https://circleci.com/gh/aibexx/core/'$CIRCLE_BUILD_NUM'",
+                "description": "E2E tests failed on LambdaTest",
+                "context": "ci/e2e-tests"
+              }' \
+              "https://api.github.com/repos/aibexx/core/statuses/$CIRCLE_SHA1"
+          when: on_fail
 
 # Define workflows
 workflows:
   version: 2
+
+  # Simplified workflow - only LambdaTest E2E testing
   e2e_only:
     jobs:
-      - e2e_lambdatest
+      - e2e_lambdatest_localhost
