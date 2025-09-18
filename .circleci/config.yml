@@ -1,5 +1,9 @@
 version: 2.1
 
+# Use the LambdaTest orb for simplified tunnel management
+orbs:
+  lambda-tunnel: lambdatest/lambda-tunnel@1.0.0
+
 # Define reusable commands
 commands:
   install_dependencies:
@@ -7,69 +11,25 @@ commands:
     steps:
       - restore_cache:
           keys:
-            - v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}-{{ checksum "lambdatest-config.json" }}--{{ checksum "cypress.config.ts" }}-{{ checksum "scripts/health-check.ts" }}-{{ checksum "scripts/test-app-connectivity.js" }}
             - v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}
             - v5-e2e-
       - run:
           name: 'Install npm dependencies'
           command: |
-            # Ensure we're not in production mode to install devDependencies
             export HUSKY=0
-
             echo "Node version: $(node --version)"
             echo "npm version: $(npm --version)"
 
-            # Check if package-lock.json exists and is valid
             if [ -f "package-lock.json" ]; then
-              echo "package-lock.json found, verifying integrity..."
-              # Check if package-lock.json is valid JSON
-              if ! node -e "JSON.parse(require('fs').readFileSync('package-lock.json', 'utf8'))" 2>/dev/null; then
-                echo "Invalid package-lock.json detected, removing..."
-                rm package-lock.json
-              fi
-            fi
-
-            # Install dependencies (including devDependencies)
-            if [ -f "package-lock.json" ]; then
-              echo "Using npm ci for clean install (including devDependencies)..."
               npm ci --include=dev --no-audit
             else
-              echo "No valid package-lock.json found, using npm install..."
               npm install --include=dev --no-audit
             fi
 
-            # Verify installation
-            echo "Checking installed packages..."
-            echo "Total packages in node_modules: $(find node_modules -maxdepth 1 -type d | wc -l)"
-
-            # Verify critical tools are installed
-            echo "Verifying critical tools installation..."
-            for tool in eslint prettier tsc next; do
-              if [ -f "node_modules/.bin/$tool" ]; then
-                echo "$tool found in node_modules/.bin/"
-                if [ "$tool" = "eslint" ]; then
-                  echo "  ESLint version: $(node_modules/.bin/eslint --version)"
-                fi
-              else
-                echo "$tool NOT found in node_modules/.bin/"
-              fi
-            done
-
-            # List all available binaries for debugging
-            echo "Available binaries in node_modules/.bin/:"
-            ls -la node_modules/.bin/ | head -20
-
-            # Final verification - fail if ESLint is missing
-            if [ ! -f "node_modules/.bin/eslint" ]; then
-              echo "CRITICAL: ESLint installation failed"
-              echo "This usually means devDependencies were not installed properly"
-              echo "Package.json devDependencies:"
-              cat package.json | grep -A 20 '"devDependencies"'
-              exit 1
-            fi
-      - load_env_file
+            # Install LambdaTest CLI
+            sudo npm install -g lambdatest-cypress-cli
       - save_cache:
-          key: v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}-{{ checksum "lambdatest-config.json" }}--{{ checksum "cypress.config.ts" }}-{{ checksum "scripts/health-check.ts" }}-{{ checksum "scripts/test-app-connectivity.js" }}
+          key: v5-e2e-{{ checksum "package-lock.json" }}-{{ checksum "package.json" }}
           paths:
             - ~/.npm
             - node_modules
@@ -80,7 +40,6 @@ commands:
       - run:
           name: Generate .env for build/runtime
           command: |
-            echo "Generating .env from CircleCI variables..."
             cat > .env \<< EOF
             NEXT_LOG_LEVEL=${NEXT_LOG_LEVEL:-info}
             SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
@@ -93,673 +52,78 @@ commands:
             CYPRESS_TEST_EMAIL=${CYPRESS_TEST_EMAIL:-cypress-test@example.com}
             CYPRESS_TEST_PASSWORD=${CYPRESS_TEST_PASSWORD:-CypressTest123!}
             EOF
-            echo ".env generated"
-
-  setup_test_directories:
-    description: 'Create test results directories'
-    steps:
-      - run:
-          name: Create test directories
-          command: |
-            mkdir -p test-results
-            mkdir -p coverage
-            mkdir -p src/__test__/results
-            mkdir -p src/__test__/screenshots
-            mkdir -p src/__test__/videos
-
-  notify_github_status:
-    description: 'Update GitHub status check'
-    parameters:
-      status:
-        type: enum
-        enum: ['pending', 'success', 'failure']
-      context:
-        type: string
-    steps:
-      - run:
-          name: Update GitHub status
-          command: |
-            curl -X POST \
-              -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "state": "<< parameters.status >>",
-                "target_url": "https://circleci.com/gh/aibexx/core/'$CIRCLE_BUILD_NUM'",
-                "description": "CircleCI build << parameters.status >>",
-                "context": "<< parameters.context >>"
-              }' \
-              "https://api.github.com/repos/aibexx/core/statuses/$CIRCLE_SHA1"
-          when: always
 
 # Define the jobs
 jobs:
-  # LambdaTest E2E Testing - ONLY JOB
-  e2e_lambdatest_localhost:
+  e2e_lambdatest:
     docker:
       - image: cimg/node:20.19.0-browsers
     working_directory: ~/project
     environment:
       LT_BUILD_NAME: 'AIBEXX-E2E-${CIRCLE_BUILD_NUM}'
-      LT_TEST_NAME: 'AIBEXX-Multi-Browser-E2E-Tests'
-    # Set timeout to prevent hanging
-    resource_class: medium
-    parallelism: 1
     steps:
       - checkout
-
-      # Notify GitHub that E2E tests are starting
-      - notify_github_status:
-          status: pending
-          context: 'ci/e2e-tests'
-
-      # Install dependencies and load environment
-      # Cache has been updated to include E2E configuration files and remove verbose tags
-      - run:
-          name: 'Clear any legacy cache artifacts'
-          command: |
-            echo "Clearing any cached npm artifacts that might contain old verbose configs..."
-            rm -rf ~/.npm/_cacache || true
-            echo "Cache cleared"
       - install_dependencies
       - load_env_file
 
-      # Install LambdaTest Cypress CLI globally
-      - run:
-          name: 'Install LambdaTest Cypress CLI'
-          command: |
-            sudo npm install -g lambdatest-cypress-cli
-            echo "LambdaTest CLI version:"
-            npx lambdatest-cypress --version || echo "Version check failed"
-
+      # Build and start the application
       - run:
           name: 'Build application'
           command: npm run build
-
       - run:
           name: 'Start application server'
           command: npm start
           background: true
-
-      # Wait for application to be ready
       - run:
           name: 'Wait for application to be ready'
           command: |
-            echo "Waiting for application to start on port 3000..."
-            timeout 120 bash -c 'until curl --output /dev/null --silent --head --fail http://localhost:3000; do printf "."; sleep 2; done'
+            timeout 120 bash -c 'until curl --output /dev/null --silent --head --fail http://localhost:3000; do sleep 2; done'
             echo "Application is ready!"
 
-      # Test application connectivity
-      - run:
-          name: 'Test application connectivity'
-          command: |
-            echo "Running simple health check..."
-            curl -f http://localhost:3000/api/health || echo "Health check endpoint not available"
-
-      # Setup LambdaTest configuration with proper authentication
+      # Setup LambdaTest configuration
       - run:
           name: 'Setup LambdaTest configuration'
           command: |
-            # Verify credentials are available
-            if [ -z "$LT_USERNAME" ]; then
-              echo "ERROR: LT_USERNAME not set in CircleCI environment variables"
-              echo "Please add LT_USERNAME to your CircleCI project settings"
-              exit 1
-            fi
+            # Update lambdatest-config.json with actual credentials
+            sed -i "s|\${LT_USERNAME}|${LT_USERNAME}|g" lambdatest-config.json
+            sed -i "s|\${LT_ACCESS_KEY}|${LT_ACCESS_KEY}|g" lambdatest-config.json
+            sed -i "s|\${LT_BUILD_NAME:-AIBEXX-E2E-Local}|AIBEXX-E2E-${CIRCLE_BUILD_NUM}|g" lambdatest-config.json
+            sed -i "s|\${NEXT_PUBLIC_SUPABASE_URL}|${NEXT_PUBLIC_SUPABASE_URL}|g" lambdatest-config.json
+            sed -i "s|\${NEXT_PUBLIC_SUPABASE_ANON_KEY}|${NEXT_PUBLIC_SUPABASE_ANON_KEY}|g" lambdatest-config.json
+            sed -i "s|\${SUPABASE_SERVICE_ROLE_KEY}|${SUPABASE_SERVICE_ROLE_KEY}|g" lambdatest-config.json
+            sed -i "s|\${E2B_API_KEY}|${E2B_API_KEY}|g" lambdatest-config.json
+            sed -i "s|\${CYPRESS_TEST_EMAIL}|${CYPRESS_TEST_EMAIL:-cypress-test@example.com}|g" lambdatest-config.json
+            sed -i "s|\${CYPRESS_TEST_PASSWORD}|${CYPRESS_TEST_PASSWORD:-CypressTest123!}|g" lambdatest-config.json
 
-            if [ -z "$LT_ACCESS_KEY" ]; then
-              echo "ERROR: LT_ACCESS_KEY not set in CircleCI environment variables"
-              echo "Please add LT_ACCESS_KEY to your CircleCI project settings"
-              exit 1
-            fi
+      # Use LambdaTest orb to manage tunnel and run tests
+      - lambda-tunnel/with_tunnel:
+          tunnel_name: 'aibexx-e2e-tunnel'
+          after_tunnel:
+            - run:
+                name: 'Run E2E Tests on LambdaTest'
+                command: |
+                  echo "Running E2E tests with LambdaTest tunnel..."
+                  npx lambdatest-cypress run --config-file="lambdatest-config.json" --cy="--config-file cypress.config.ts --browser chrome"
 
-            echo "LambdaTest credentials found (masked):"
-            echo "Username: ${LT_USERNAME:0:4}***"
-            echo "Access Key: ${LT_ACCESS_KEY:0:4}***"
-
-            # Create downloads directory
-            mkdir -p downloads
-
-            # Update existing lambdatest-config.json with actual credentials and CI-specific settings
-            if [ -f "lambdatest-config.json" ]; then
-              echo "Using existing lambdatest-config.json as base"
-              
-              # Create a backup of the original config
-              cp lambdatest-config.json lambdatest-config.json.backup
-              
-              # Use sed with a different delimiter to handle special characters
-              # Replace placeholders with actual values using | as delimiter instead of /
-              sed -i "s|\${LT_USERNAME}|${LT_USERNAME}|g" lambdatest-config.json
-              sed -i "s|\${LT_ACCESS_KEY}|${LT_ACCESS_KEY}|g" lambdatest-config.json
-              sed -i "s|\${LT_BUILD_NAME:-AIBEXX-E2E-Local}|AIBEXX-E2E-${CIRCLE_BUILD_NUM}|g" lambdatest-config.json
-              
-              # Update environment variables (using | delimiter)
-              sed -i "s|\${NEXT_PUBLIC_SUPABASE_URL}|${NEXT_PUBLIC_SUPABASE_URL}|g" lambdatest-config.json
-              sed -i "s|\${NEXT_PUBLIC_SUPABASE_ANON_KEY}|${NEXT_PUBLIC_SUPABASE_ANON_KEY}|g" lambdatest-config.json
-              sed -i "s|\${SUPABASE_SERVICE_ROLE_KEY}|${SUPABASE_SERVICE_ROLE_KEY}|g" lambdatest-config.json
-              sed -i "s|\${E2B_API_KEY}|${E2B_API_KEY}|g" lambdatest-config.json
-              
-              # Set headless mode for CI
-              sed -i 's|"headless": false|"headless": true|g' lambdatest-config.json
-              
-              echo "LambdaTest configuration updated for CI environment"
-            else
-              echo "ERROR: lambdatest-config.json not found in repository"
-              exit 1
-            fi
-
-            # Verify configuration file is valid
-            echo "Verifying updated configuration..."
-            if command -v jq > /dev/null; then
-              jq . lambdatest-config.json > /dev/null || (echo "Invalid JSON in lambdatest-config.json" && exit 1)
-              echo "Configuration JSON is valid"
-              
-              # Show the final configuration that will be used
-              echo "=== FINAL LAMBDATEST CONFIGURATION ==="
-              jq . lambdatest-config.json
-            else
-              echo "jq not available, skipping JSON validation"
-            fi
-
-            # Validate TypeScript configuration exists and is readable
-            if [ -f "cypress.config.ts" ]; then
-              echo "Validating TypeScript configuration..."
-              node -e "
-                try {
-                  require('typescript');
-                  console.log('TypeScript is available');
-                } catch (e) {
-                  console.log('TypeScript not found:', e.message);
-                }
-              " || echo "TypeScript validation failed"
-            fi
-
-            # Create a simple reporter config if it doesn't exist
-            if [ ! -f "reporter_config.json" ]; then
-              cat > reporter_config.json \<< 'EOF'
-            {
-              "reporterEnabled": "mochawesome",
-              "mochawesomeReporterOptions": {
-                "reportDir": "src/__test__/results",
-                "quite": true,
-                "overwrite": false,
-                "html": false,
-                "json": true
-              }
-            }
-            EOF
-              echo "Reporter configuration created"
-            fi
-
-      # Run Cypress E2E tests on LambdaTest
-      - run:
-          name: 'Run E2E Tests on LambdaTest Cloud'
-          no_output_timeout: 20m
-          command: |
-            set -e
-
-            # Final verification before running tests
-            echo "Pre-flight checks..."
-
-            # 1. Verify app is running
-            if ! curl -f http://localhost:3000 > /dev/null 2>&1; then
-              echo "ERROR: Application not accessible on localhost:3000"
-              exit 1
-            fi
-            echo " Application is running"
-
-            # 2. Verify LambdaTest credentials
-            if [ -z "$LT_USERNAME" ] || [ -z "$LT_ACCESS_KEY" ]; then
-              echo "ERROR: LambdaTest credentials not found"
-              exit 1
-            fi
-            echo " LambdaTest credentials configured"
-
-            # 3. Verify test specs exist
-            if ! find src/__test__/e2e -name "*.cy.ts" -type f | head -1 > /dev/null 2>&1; then
-              echo "WARNING: No test specs found in src/__test__/e2e/"
-              echo "Available files in src/__test__/e2e/:"
-              ls -la src/__test__/e2e/ || echo "Directory does not exist"
-              echo "Creating a sample test for verification..."
-              mkdir -p src/__test__/e2e
-              cat > src/__test__/e2e/sample.cy.ts \<< 'EOF'
-            describe('Sample E2E Test', () => {
-              it('should load the application', () => {
-                cy.visit('/')
-                cy.contains('body').should('exist')
-              })
-            })
-            EOF
-            else
-              echo " Test specs found:"
-              find src/__test__/e2e -name "*.cy.ts" -type f | head -5
-            fi
-
-            # 4. Create test results directory before running tests
-            echo "Creating test results directory..."
-            mkdir -p src/__test__/results
-            mkdir -p src/__test__/screenshots
-            mkdir -p src/__test__/videos
-
-            # 5. Verify configuration files
-            echo "Verifying configuration files..."
-            if [ -f "lambdatest-config.json" ]; then
-              echo "LambdaTest config exists"
-              
-              # Validate JSON syntax
-              if ! jq . lambdatest-config.json > /dev/null 2>&1; then
-                echo "ERROR: lambdatest-config.json has invalid JSON syntax"
-                exit 1
-              fi
-              
-              # Check critical fields
-              if ! jq -e '.run_settings.specs' lambdatest-config.json > /dev/null; then
-                echo "ERROR: Missing specs configuration in lambdatest-config.json"
-                exit 1
-              fi
-              
-              if ! jq -e '.run_settings.npm_dependencies.cypress' lambdatest-config.json > /dev/null; then
-                echo "ERROR: Missing Cypress dependency in lambdatest-config.json"
-                exit 1
-              fi
-              
-              echo "LambdaTest config validation passed"
-            else
-              echo "ERROR: lambdatest-config.json missing"
-              exit 1
-            fi
-
-            if [ -f "cypress.config.ts" ]; then
-              echo "Cypress config exists"
-              
-              # Basic syntax check
-              if ! node -e "require('typescript').transpile(require('fs').readFileSync('cypress.config.ts', 'utf8'))" > /dev/null 2>&1; then
-                echo "WARNING: Cypress config may have syntax issues"
-              fi
-            else
-              echo "ERROR: Cypress config missing"
-              exit 1
-            fi
-
-                        # 6. Run LambdaTest with integrated tunnel
-            echo "Running LambdaTest with integrated tunnel..."
-            echo "Build: AIBEXX-E2E-${CIRCLE_BUILD_NUM}"
-
-            # Set environment variables for LambdaTest
-            export LT_USERNAME="${LT_USERNAME}"
-            export LT_ACCESS_KEY="${LT_ACCESS_KEY}"
-
-            # Export environment variables for the application
-            export NEXT_PUBLIC_SUPABASE_URL="${NEXT_PUBLIC_SUPABASE_URL}"
-            export NEXT_PUBLIC_SUPABASE_ANON_KEY="${NEXT_PUBLIC_SUPABASE_ANON_KEY}"
-            export SUPABASE_SERVICE_ROLE_KEY="${SUPABASE_SERVICE_ROLE_KEY}"
-            export E2B_API_KEY="${E2B_API_KEY}"
-            export NODE_ENV="test"
-            export CYPRESS_BASE_URL="http://localhost:3000"
-            export CYPRESS_TEST_EMAIL="${CYPRESS_TEST_EMAIL:-cypress-test@example.com}"
-            export CYPRESS_TEST_PASSWORD="${CYPRESS_TEST_PASSWORD:-CypressTest123!}"
-
-            # Initialize test status tracking
-            TEST_SUCCESS=false
-            LAMBDATEST_EXIT_CODE=0
-
-            # Run LambdaTest with integrated tunnel (this will automatically establish tunnel)
-            echo "Starting LambdaTest execution with automatic tunnel..."
-
-            # Verify the command we're about to run
-            echo "Command to execute: npx lambdatest-cypress run --config-file=lambdatest-config.json --cy=\"--config-file cypress.config.ts\""
-            echo "LambdaTest CLI is available: $(which lambdatest-cypress || echo 'Not found in PATH')"
-
-            # Test LambdaTest CLI connectivity
-            echo "Testing LambdaTest CLI connectivity..."
-            if ! npx lambdatest-cypress --version > /dev/null 2>&1; then
-              echo "ERROR: LambdaTest CLI is not working properly"
-              echo "Attempting to reinstall..."
-              npm install -g lambdatest-cypress-cli@latest
-              if ! npx lambdatest-cypress --version > /dev/null 2>&1; then
-                echo "ERROR: Failed to install/use LambdaTest CLI"
-                exit 1
-              fi
-            fi
-
-            echo "LambdaTest CLI version: $(npx lambdatest-cypress --version 2>/dev/null || echo 'Version check failed')"
-
-            # Validate LambdaTest configuration before execution
-            echo "Validating LambdaTest configuration..."
-            if ! jq -e '.run_settings.specs' lambdatest-config.json > /dev/null; then
-              echo "ERROR: Invalid specs configuration in lambdatest-config.json"
-              exit 1
-            fi
-
-            # Show configuration summary
-            echo "LambdaTest Configuration Summary:"
-            echo "  Build Name: $(jq -r '.run_settings.build_name' lambdatest-config.json)"
-            echo "  Specs Pattern: $(jq -r '.run_settings.specs' lambdatest-config.json)"
-            echo "  Base URL: $(jq -r '.run_settings.baseUrl' lambdatest-config.json)"
-            echo "  Headless: $(jq -r '.run_settings.headless' lambdatest-config.json)"
-            echo "  Tunnel: $(jq -r '.tunnel_settings.tunnel' lambdatest-config.json)"
-
-            # Debug: Show current directory and file structure
-            echo "Current working directory: $(pwd)"
-            echo "Directory contents:"
-            ls -la
-            echo "E2E test files:"
-            find src/__test__/e2e -name "*.cy.ts" -type f || echo "No .cy.ts files found"
-            echo "Cypress config files:"
-            ls -la cypress.config.ts || echo "No cypress.config.ts found"
-            echo "LambdaTest config:"
-            ls -la lambdatest-config.json || echo "No lambdatest-config.json found"
-
-            # Test LambdaTest authentication before running tests
-            echo "Testing LambdaTest authentication..."
-            if ! curl -s -u "${LT_USERNAME}:${LT_ACCESS_KEY}" "https://api.lambdatest.com/automation/api/v1/builds?limit=1" > /dev/null; then
-              echo "ERROR: LambdaTest authentication failed"
-              echo "Please verify LT_USERNAME and LT_ACCESS_KEY are correct"
-              exit 1
-            fi
-            echo "LambdaTest authentication successful"
-
-            # Test the LambdaTest command syntax
-            echo "Testing LambdaTest command syntax..."
-            echo "Command that will be executed:"
-            echo "lambdatest-cypress run --config-file=lambdatest-config.json --cy=\"--config-file cypress.config.ts\""
-
-            # Verify the command can be parsed (dry run)
-            if ! npx lambdatest-cypress run --help > /dev/null 2>&1; then
-              echo "ERROR: LambdaTest CLI help command failed"
-              echo "This indicates the CLI might not be properly installed"
-              exit 1
-            fi
-            echo "LambdaTest CLI appears to be working"
-
-            set +e  # Temporarily disable exit on error to handle it manually
-
-            # Use the npm script with timeout
-            echo "Running LambdaTest execution..."
-            echo "About to execute: npm run lambdatest:run"
-            echo "Environment variables set:"
-            echo "  LT_USERNAME: ${LT_USERNAME:0:4}***"
-            echo "  LT_ACCESS_KEY: ${LT_ACCESS_KEY:0:4}***"
-            echo "  CYPRESS_BASE_URL: $CYPRESS_BASE_URL"
-            echo "  NODE_ENV: $NODE_ENV"
-
-            # Run all tests using the main lambdatest-config.json
-            echo "Running all E2E tests in a single LambdaTest build..."
-
-            # Run LambdaTest with the main configuration file
-            echo "Executing LambdaTest command directly..."
-            echo "Starting LambdaTest with 10-minute timeout to prevent hanging..."
-
-            # Use a shorter timeout to prevent infinite hanging
-            # Run LambdaTest in background and monitor for hanging patterns
-            timeout 600 npx lambdatest-cypress run --config-file="lambdatest-config.json" --cy="--config-file cypress.config.ts" 2>&1 | tee "lambdatest-output.log" &
-            LT_PID=$!
-
-            # Monitor for hanging patterns
-            sleep 30  # Give it time to start
-            for i in {1..18}; do  # Check every 30 seconds for 9 minutes
-              if ! kill -0 $LT_PID 2>/dev/null; then
-                echo "LambdaTest process completed"
-                wait $LT_PID
-                LAMBDATEST_EXIT_CODE=$?
-                break
-              fi
-              
-              # Check for hanging indicators in the log
-              if [ -f "lambdatest-output.log" ]; then
-                if tail -20 "lambdatest-output.log" | grep -q "Waiting for"; then
-                  echo "WARNING: Detected 'Waiting for' message - possible hang at iteration $i"
-                fi
-              fi
-              
-              echo "LambdaTest still running... (check $i/18)"
-              sleep 30
-            done
-
-            # If we get here and process is still running, it's likely hung
-            if kill -0 $LT_PID 2>/dev/null; then
-              echo "ERROR: LambdaTest appears to be hung, terminating..."
-              kill -TERM $LT_PID 2>/dev/null || true
-              sleep 5
-              kill -KILL $LT_PID 2>/dev/null || true
-              LAMBDATEST_EXIT_CODE=124
-            fi || {
-              TIMEOUT_EXIT=$?
-              if [ $TIMEOUT_EXIT -eq 124 ]; then
-                echo "ERROR: LambdaTest execution timed out after 10 minutes"
-                echo "This usually indicates a configuration issue or infinite wait"
-                LAMBDATEST_EXIT_CODE=124
-              else
-                echo "LambdaTest command failed with exit code: $TIMEOUT_EXIT"
-                LAMBDATEST_EXIT_CODE=$TIMEOUT_EXIT
-              fi
-            }
-
-            echo "LambdaTest execution completed"
-
-            # Show the full log output
-            echo "=== FULL LAMBDATEST OUTPUT ==="
-            cat lambdatest-output.log
-
-            # If the CLI produced a YAML config, print it for diagnostics
-            if [ -f ".lambdatest/lt_cypress_autogenerated.yml" ]; then
-              echo "=== GENERATED LAMBDATEST YAML ==="
-              sed 's/\(access_key:\).*/\1 ****/g' .lambdatest/lt_cypress_autogenerated.yml | sed 's/\(username:\).*/\1 ****/g'
-            fi
-
-            LAMBDATEST_EXIT_CODE=$?
-            set -e  # Re-enable exit on error
-
-            echo "LambdaTest command completed with exit code: $LAMBDATEST_EXIT_CODE"
-
-            # Check for specific error patterns in the log (fail fast)
-            echo "=== ANALYZING ERRORS ==="
-
-            # Check for infinite running indicators
-            if grep -i "waiting for" lambdatest-output.log; then
-              echo "Found 'waiting for' messages - possible infinite wait"
-            fi
-
-            if grep -i "timeout" lambdatest-output.log; then
-              echo "Found timeout messages"
-            fi
-
-            if grep -i "could not execute cypress run command" lambdatest-output.log; then
-              echo "Found 'could not execute cypress run command' error"
-              echo "This usually indicates dependency or configuration issues"
-            fi
-
-            if grep -i "tunnel" lambdatest-output.log | grep -i "error"; then
-              echo "Found tunnel-related errors"
-            fi
-
-            if grep -i "error" lambdatest-output.log; then
-              echo "Found general errors in LambdaTest output"
-            fi
-
-            if grep -i "failed" lambdatest-output.log; then
-              echo "Found failures in LambdaTest output"
-            fi
-
-            # Check for specific LambdaTest server errors
-            if grep -i "Some Error occured on Lambdatest Server" lambdatest-output.log; then
-              echo "Found LambdaTest server error - marking failure and exiting step early"
-              echo "1" > lt_failed
-              exit 0
-            fi
-
-            # If the LambdaTest command failed, mark and exit this step early
-            if [ $LAMBDATEST_EXIT_CODE -ne 0 ]; then
-              echo "LambdaTest command failed (exit $LAMBDATEST_EXIT_CODE) - marking failure and exiting step early"
-              echo "1" > lt_failed
-              exit 0
-            fi
-
-            # Check LambdaTest API for more detailed error information
-            echo "Checking LambdaTest API for error details..."
-            RECENT_BUILD_INFO=$(curl -s -u "${LT_USERNAME}:${LT_ACCESS_KEY}" \
-              "https://api.lambdatest.com/automation/api/v1/builds?limit=1&status=error" 2>/dev/null || echo "")
-
-            if [ -n "$RECENT_BUILD_INFO" ]; then
-              echo "Recent error build information:"
-              echo "$RECENT_BUILD_INFO" | jq '.' || echo "$RECENT_BUILD_INFO"
-            fi
-
-            # Check exit code and determine success/failure
-            if [ $LAMBDATEST_EXIT_CODE -eq 0 ]; then
-              echo "LambdaTest execution completed successfully"
-              TEST_SUCCESS=true
-            else
-              echo "LambdaTest execution failed with exit code: $LAMBDATEST_EXIT_CODE"
-              TEST_SUCCESS=false
-            fi
-
-            # 8. Verify test results and fetch build information
-            echo "Verifying test results..."
-
-            # Always try to fetch build information for analysis
-            echo "Fetching LambdaTest build information..."
-            BUILD_INFO=$(curl -s -u "${LT_USERNAME}:${LT_ACCESS_KEY}" \
-              "https://api.lambdatest.com/automation/api/v1/builds?limit=1" 2>/dev/null || echo "")
-
-            if [ -n "$BUILD_INFO" ]; then
-              echo "Build information retrieved:"
-              echo "$BUILD_INFO" | jq '.' || echo "$BUILD_INFO"
-              
-              # Extract test status from build info if available
-              BUILD_STATUS=$(echo "$BUILD_INFO" | jq -r '.data[0].status_ind // "unknown"' 2>/dev/null || echo "unknown")
-              TOTAL_TESTS=$(echo "$BUILD_INFO" | jq -r '.data[0].test_count // 0' 2>/dev/null || echo "0")
-              PASSED_TESTS=$(echo "$BUILD_INFO" | jq -r '.data[0].passed_count // 0' 2>/dev/null || echo "0")
-              FAILED_TESTS=$(echo "$BUILD_INFO" | jq -r '.data[0].failed_count // 0' 2>/dev/null || echo "0")
-              
-              echo "Build Status: $BUILD_STATUS"
-              echo "Total Tests: $TOTAL_TESTS"
-              echo "Passed Tests: $PASSED_TESTS"
-              echo "Failed Tests: $FAILED_TESTS"
-              
-              # Additional check: if build shows failures, mark as failed
-              if [ "$FAILED_TESTS" != "0" ] && [ "$FAILED_TESTS" != "null" ]; then
-                echo "LambdaTest build shows $FAILED_TESTS failed tests"
-                TEST_SUCCESS=false
-              fi
-              
-              # Check if build status indicates failure
-              if [ "$BUILD_STATUS" = "error" ] || [ "$BUILD_STATUS" = "failed" ]; then
-                echo "LambdaTest build status indicates failure: $BUILD_STATUS"
-                TEST_SUCCESS=false
-              fi
-            else
-              echo "Could not fetch build information from LambdaTest API"
-            fi
-
-            # Fetch recent error builds to surface server-side error messages
-            echo "Fetching recent error builds for diagnostics..."
-            ERROR_BUILDS=$(curl -s -u "${LT_USERNAME}:${LT_ACCESS_KEY}" \
-              "https://api.lambdatest.com/automation/api/v1/builds?status=error&limit=3" 2>/dev/null || echo "")
-            if [ -n "$ERROR_BUILDS" ]; then
-              echo "Recent error builds (masked):"
-              echo "$ERROR_BUILDS" | jq '.data | map({id, name, status_ind, created_at, updated_at})' || echo "$ERROR_BUILDS"
-            fi
-
-            # 9. Check for local test results
-            if [ -d "src/__test__/results" ]; then
-              echo "Checking local test results..."
-              RESULT_FILES=$(find src/__test__/results -name "*.json" 2>/dev/null | wc -l)
-              echo "Found $RESULT_FILES result files"
-              
-              if [ "$RESULT_FILES" -eq 0 ]; then
-                echo "No test result files found locally"
-              fi
-            fi
-
-            # 10. Cleanup (tunnel is automatically managed by LambdaTest)
-            echo "LambdaTest execution completed, tunnel automatically cleaned up"
-
-            # 11. Final test result evaluation
-            echo "Final test result evaluation..."
-            echo "LambdaTest Exit Code: $LAMBDATEST_EXIT_CODE"
-            echo "Test Success Flag: $TEST_SUCCESS"
-
-            if [ "$TEST_SUCCESS" = "true" ] && [ $LAMBDATEST_EXIT_CODE -eq 0 ]; then
-              echo "SUCCESS: All E2E tests passed on LambdaTest"
-              exit 0
-            else
-              echo "FAILURE: E2E tests failed on LambdaTest"
-              echo "Reason: Exit code $LAMBDATEST_EXIT_CODE or test failures detected"
-              
-              # Provide helpful debugging information
-              echo ""
-              echo "Debugging information:"
-              echo "- Check LambdaTest dashboard for detailed test results"
-              echo "- Build: AIBEXX-E2E-${CIRCLE_BUILD_NUM}"
-              
-              exit 1
-            fi
-
-      # Store test results and artifacts (only if job reaches this point)
+      # Store test results
       - store_test_results:
           path: src/__test__/results
-
       - store_artifacts:
           path: src/__test__/results
           destination: e2e-test-results
           when: always
-
       - store_artifacts:
           path: src/__test__/screenshots
           destination: e2e-screenshots
           when: always
-
       - store_artifacts:
           path: src/__test__/videos
           destination: e2e-videos
           when: always
 
-      # Upload LambdaTest CLI diagnostics
-      - store_artifacts:
-          path: lambdatest-output.log
-          destination: lambdatest-output.log
-          when: always
-      - store_artifacts:
-          path: .lambdatest
-          destination: lambdatest-cli
-          when: always
-
-      # Fail the job if previous step marked LambdaTest failure
-      - run:
-          name: 'Fail job on LambdaTest error marker'
-          command: |
-            if [ -f lt_failed ]; then
-              echo "Detected LambdaTest failure marker; failing job fast."
-              exit 1
-            fi
-          when: always
-
-      # Notify GitHub of E2E test success (only reached if tests passed)
-      - notify_github_status:
-          status: success
-          context: 'ci/e2e-tests'
-
-      # On failure, notify GitHub using CircleCI's when condition
-      - run:
-          name: 'Notify GitHub of E2E test failure'
-          command: |
-            curl -X POST \
-              -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "state": "failure",
-                "target_url": "https://circleci.com/gh/aibexx/core/'$CIRCLE_BUILD_NUM'",
-                "description": "E2E tests failed on LambdaTest",
-                "context": "ci/e2e-tests"
-              }' \
-              "https://api.github.com/repos/aibexx/core/statuses/$CIRCLE_SHA1"
-          when: on_fail
-
 # Define workflows
 workflows:
   version: 2
-
-  # Simplified workflow - only LambdaTest E2E testing
   e2e_only:
     jobs:
-      - e2e_lambdatest_localhost
+      - e2e_lambdatest
