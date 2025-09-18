@@ -1,0 +1,32 @@
+
+
+echo "Running pre-commit checks..."
+
+# Check TypeScript compilation
+echo "Checking TypeScript compilation..."
+npx tsc --noEmit
+if [ $? -ne 0 ]; then
+  echo "TypeScript compilation failed!"
+  echo "Fix TypeScript errors before committing"
+  exit 1
+fi
+
+# Check code formatting
+echo "Checking code formatting..."
+npx prettier --check .
+if [ $? -ne 0 ]; then
+  echo "Code formatting check failed!"
+  echo "Run 'npm run format' to fix formatting issues"
+  exit 1
+fi
+
+# Check linting with no warnings
+echo "Running ESLint..."
+npm run lint -- --max-warnings=0
+if [ $? -ne 0 ]; then
+  echo "Linting check failed!"
+  echo "Fix linting errors and warnings before committing"
+  exit 1
+fi
+
+echo "All pre-commit checks passed!"

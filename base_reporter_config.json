@@ -1,0 +1,10 @@
+{
+  "reporterEnabled": "mochawesome",
+  "mochawesomeReporterOptions": {
+    "reportDir": "src/__test__/results",
+    "quite": true,
+    "overwrite": false,
+    "html": false,
+    "json": true
+  }
+}
