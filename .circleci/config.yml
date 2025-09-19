@@ -115,7 +115,6 @@ jobs:
             sed -i "s|\${LT_USERNAME}|${LT_USERNAME}|g" lambdatest-config.json
             sed -i "s|\${LT_ACCESS_KEY}|${LT_ACCESS_KEY}|g" lambdatest-config.json
             sed -i "s|\${LT_BUILD_NAME:-AIBEXX-E2E-Local}|AIBEXX-E2E-Windows-${CIRCLE_BUILD_NUM}|g" lambdatest-config.json
-            sed -i "s|\${LT_BUILD_NAME:-local}|AIBEXX-E2E-Windows-${CIRCLE_BUILD_NUM}|g" lambdatest-config.json
             sed -i "s|\${NEXT_PUBLIC_SUPABASE_URL}|${NEXT_PUBLIC_SUPABASE_URL}|g" lambdatest-config.json
             sed -i "s|\${NEXT_PUBLIC_SUPABASE_ANON_KEY}|${NEXT_PUBLIC_SUPABASE_ANON_KEY}|g" lambdatest-config.json
             sed -i "s|\${SUPABASE_SERVICE_ROLE_KEY}|${SUPABASE_SERVICE_ROLE_KEY}|g" lambdatest-config.json
@@ -252,11 +251,12 @@ jobs:
             npm run build
 
             # Update LambdaTest config for WebKit Safari
-            cp webkit-lambdatest-config.json lambdatest-webkit-config.json
+            cp lambdatest-config.json lambdatest-webkit-config.json
+            sed -i 's/"browser": "Chrome"/"browser": "Safari"/g' lambdatest-webkit-config.json
+            sed -i 's/"platform": "Windows 11"/"platform": "macOS Monterey"/g' lambdatest-webkit-config.json
             sed -i "s|\${LT_USERNAME}|${LT_USERNAME}|g" lambdatest-webkit-config.json
             sed -i "s|\${LT_ACCESS_KEY}|${LT_ACCESS_KEY}|g" lambdatest-webkit-config.json
             sed -i "s|\${LT_BUILD_NAME:-AIBEXX-E2E-Local}|AIBEXX-E2E-WebKit-${CIRCLE_BUILD_NUM}|g" lambdatest-webkit-config.json
-            sed -i "s|\${LT_BUILD_NAME:-local}|AIBEXX-E2E-WebKit-${CIRCLE_BUILD_NUM}|g" lambdatest-webkit-config.json
             sed -i "s|\${NEXT_PUBLIC_SUPABASE_URL}|${NEXT_PUBLIC_SUPABASE_URL}|g" lambdatest-webkit-config.json
             sed -i "s|\${NEXT_PUBLIC_SUPABASE_ANON_KEY}|${NEXT_PUBLIC_SUPABASE_ANON_KEY}|g" lambdatest-webkit-config.json
             sed -i "s|\${SUPABASE_SERVICE_ROLE_KEY}|${SUPABASE_SERVICE_ROLE_KEY}|g" lambdatest-webkit-config.json
@@ -282,6 +282,7 @@ jobs:
                 sleep 2
               fi
             done
+            echo "ERROR: Application failed to start"
             exit 1
 
       # Run Cypress E2E tests on LambdaTest WebKit Safari
