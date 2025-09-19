@@ -47,6 +47,7 @@
     }
   },
   "tunnel_settings": {
-    "tunnel": true
+    "tunnel": true,
+    "tunnel_name": "aibexx-windows-${LT_BUILD_NAME:-local}"
   }
 }
