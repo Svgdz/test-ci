@@ -282,7 +282,6 @@ jobs:
                 sleep 2
               fi
             done
-            echo "ERROR: Application failed to start"
             exit 1
 
       # Run Cypress E2E tests on LambdaTest WebKit Safari
