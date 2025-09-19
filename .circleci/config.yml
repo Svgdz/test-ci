@@ -330,8 +330,6 @@ jobs:
               exit 1
             fi
 
-            echo "✅ WebKit Safari tests completed successfully"
-
       # Store test artifacts
       - store_test_results:
           path: src/__test__/results
