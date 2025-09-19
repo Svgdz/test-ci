@@ -370,4 +370,6 @@ workflows:
   e2e_cross_browser:
     jobs:
       - e2e_lambdatest_windows
-      - e2e_lambdatest_webkit
+      - e2e_lambdatest_webkit:
+          requires:
+            - e2e_lambdatest_windows
