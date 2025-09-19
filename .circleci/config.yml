@@ -362,11 +362,7 @@ jobs:
               "https://api.github.com/repos/aibexx/core/statuses/$CIRCLE_SHA1"
           when: on_fail
 
-# Define workflows
 workflows:
-  version: 2
-
-  # E2E Testing Only - Two Browser Matrix
   e2e_cross_browser:
     jobs:
       - e2e_lambdatest_windows
